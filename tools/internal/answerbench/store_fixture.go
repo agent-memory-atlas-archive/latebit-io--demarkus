@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/store"
 )
@@ -17,6 +17,25 @@ func LoadStoreFixture(ctx context.Context, root, questions string) (Fixture, err
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return Fixture{}, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return Fixture{}, err
+	}
+	questions, err = filepath.Abs(questions)
+	if err != nil {
+		return Fixture{}, err
+	}
+	questions, err = filepath.EvalSymlinks(questions)
+	if err != nil {
+		return Fixture{}, err
+	}
+	rel, err := filepath.Rel(root, questions)
+	if err != nil {
+		return Fixture{}, err
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return Fixture{}, fmt.Errorf("questions directory must be outside served corpus root")
 	}
 	f := Fixture{StoreRoot: root, Hashes: make(map[string]string), storedVersions: make(map[string]map[int]bool)}
 	hash := sha256.New()
@@ -45,7 +64,7 @@ func LoadStoreFixture(ctx context.Context, root, questions string) (Fixture, err
 		name   string
 		target any
 	}{{"tasks", &f.Tasks}, {"rubric", &f.Rubrics}} {
-		raw, err := os.ReadFile(filepath.Join(questions, item.name+".json"))
+		raw, err := readScorerFile(root, filepath.Join(questions, item.name+".json"), 8<<20)
 		if err != nil {
 			return f, err
 		}
@@ -54,8 +73,26 @@ func LoadStoreFixture(ctx context.Context, root, questions string) (Fixture, err
 		}
 		f.Hashes[item.name] = digest(raw)
 	}
+	if err := loadDataset(questions, &f); err != nil {
+		return f, err
+	}
 	err = f.Validate()
 	return f, err
+}
+
+func readScorerFile(root, file string, limit int64) ([]byte, error) {
+	physical, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, physical)
+	if err != nil {
+		return nil, err
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return nil, fmt.Errorf("scorer file %s resolves inside served corpus root", file)
+	}
+	return readBounded(physical, limit)
 }
 
 // InspectStore reports snapshot identity without sending any content to a model.

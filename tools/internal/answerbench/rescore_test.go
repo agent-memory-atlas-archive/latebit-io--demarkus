@@ -3,9 +3,11 @@ package answerbench
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRescorePreservesOriginalAndSpend(t *testing.T) {
@@ -13,8 +15,9 @@ func TestRescorePreservesOriginalAndSpend(t *testing.T) {
 	trace := validAnswerTrace(t, &f, "q1")
 	trace.Usage.Input = 123
 	report := Report{
-		Spec:     RunSpec{Hashes: f.Hashes, Port: 16319, Repeats: 1, ExpectedAttempts: 1},
-		Attempts: []Attempt{{Task: "q1", Repeat: 1, Trace: trace, Score: Score{Correct: false}}},
+		Generated: time.Now(),
+		Spec:      RunSpec{Suite: "graph-answer-v1", Hashes: f.Hashes, Port: 16319, Repeats: 1, ExpectedAttempts: 1},
+		Attempts:  []Attempt{{Task: "q1", Category: "direct", Repeat: 1, Trace: trace, Score: Score{Correct: false}}},
 	}
 	report.Spec.Hashes["rubric"] = "old-rubric"
 	report.summarize()
@@ -47,5 +50,46 @@ func TestRescorePreservesOriginalAndSpend(t *testing.T) {
 	}
 	if _, err := Rescore(beforePath, filepath.Join(dir, "invalid.json")); err == nil {
 		t.Fatal("changed corpus accepted for rescore")
+	}
+}
+
+func TestDatasetRescoreRequiresAndUpdatesReaderContract(t *testing.T) {
+	f, task, trace := scopedAnswerFixture(t, "q2")
+	contract, err := readerContract("section-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractHash := digest([]byte(contract))
+	f.Hashes["dataset"] = "new-dataset"
+	f.Dataset = &DatasetManifest{ID: "dataset-v2", Source: "mark://fixture", ToolProfile: "scoped-direct-read-v1", ReaderPolicy: "section-first", ReaderContractSHA256: contractHash}
+	hashes := make(map[string]string, len(f.Hashes))
+	maps.Copy(hashes, f.Hashes)
+	hashes["dataset"] = "old-dataset"
+	report := Report{
+		Format: reportFormatV2, Generated: time.Now(),
+		Spec:      RunSpec{Suite: "independent-answer-v1", Origin: "mark://fixture", Repeats: 1, ExpectedAttempts: 1, PromptHash: "prompt", ConfigHash: "config", ScoringVersion: independentScoringVersion, ReaderPolicy: "section-first", Dataset: "dataset-v1", DatasetHash: "old-dataset", ReaderContractHash: contractHash, Hashes: hashes},
+		Binaries:  map[string]string{"server": "server", "mcp": "mcp", "runner": "runner", "proxy": "proxy"},
+		Lifecycle: Lifecycle{Attribution: "run-read-capability-v1", Endpoint: "127.0.0.1:16319", EndpointFree: true, StartupVerified: true, ServerStayedUp: true, CleanupVerified: true, ToolProfile: "scoped-direct-read-v1", ToolNames: []string{"mark_fetch"}},
+		Attempts:  []Attempt{{Task: task.ID, Category: task.Category, Repeat: 1, Phase: "cold", Trace: trace, Score: Score{DimensionsRecorded: true}}},
+	}
+	report.summarize()
+	dir := t.TempDir()
+	before, after := filepath.Join(dir, "before.json"), filepath.Join(dir, "after.json")
+	if err := writeJSON(before, report); err != nil {
+		t.Fatal(err)
+	}
+	rescored, err := RescoreWithFixture(before, after, &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rescored.Spec.DatasetHash != "new-dataset" || rescored.Spec.Hashes["dataset"] != "new-dataset" {
+		t.Fatalf("dataset hashes not updated: %+v", rescored.Spec)
+	}
+	report.Spec.ReaderContractHash = "other-contract"
+	if err := writeJSON(before, report); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RescoreWithFixture(before, filepath.Join(dir, "invalid.json"), &f); err == nil {
+		t.Fatal("changed reader contract accepted")
 	}
 }

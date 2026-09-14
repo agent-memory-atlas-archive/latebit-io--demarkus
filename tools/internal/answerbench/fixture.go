@@ -39,6 +39,7 @@ type Task struct {
 	Category string            `json:"category"`
 	Question string            `json:"question"`
 	Fields   map[string]string `json:"fields"`
+	Scope    string            `json:"scope,omitempty"`
 }
 
 // Evidence identifies the source passage required to support one answer field.
@@ -49,12 +50,28 @@ type Evidence struct {
 	Quote   string `json:"quote"`
 }
 
+// Completion is scorer-only proof that a scope was completed or failed visibly.
+type Completion struct {
+	Step     string `json:"step"`
+	Tool     string `json:"tool"`
+	URL      string `json:"url"`
+	Query    string `json:"query,omitempty"`
+	Match    string `json:"match,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Matches  *int   `json:"matches,omitempty"`
+	Complete *bool  `json:"complete,omitempty"`
+	Failure  bool   `json:"failure,omitempty"`
+}
+
 // Rubric is scorer-only data, never included in reader input or served documents.
 type Rubric struct {
-	Answer       map[string]json.RawMessage `json:"answer"`
-	Evidence     map[string][]Evidence      `json:"evidence"`
-	Abstain      bool                       `json:"abstain"`
-	Supplemental map[string][]Evidence      `json:"supplemental,omitempty"`
+	Answer         map[string]json.RawMessage `json:"answer"`
+	Evidence       map[string][]Evidence      `json:"evidence"`
+	Abstain        bool                       `json:"abstain"`
+	Supplemental   map[string][]Evidence      `json:"supplemental,omitempty"`
+	Outcome        string                     `json:"outcome,omitempty"`
+	Completion     []Completion               `json:"completion,omitempty"`
+	Contradictions []Evidence                 `json:"contradictions,omitempty"`
 }
 
 // Fixture binds source snapshots, tasks, and separately held scoring rules.
@@ -65,6 +82,7 @@ type Fixture struct {
 	Hashes         map[string]string
 	StoreRoot      string
 	VersionCount   int
+	Dataset        *DatasetManifest
 	storedVersions map[string]map[int]bool
 }
 
@@ -102,23 +120,22 @@ func LoadFixture() (Fixture, error) {
 
 // Validate checks source identity, task uniqueness, and rubric provenance.
 func (f *Fixture) Validate() error {
-	docs := make(map[string]bool)
-	for _, doc := range f.Documents {
-		if !strings.HasPrefix(doc.Path, "/") || !strings.HasSuffix(doc.Path, ".md") || path.Clean(doc.Path) != doc.Path || docs[doc.Path] || len(doc.Versions) == 0 {
-			return fmt.Errorf("invalid or duplicate document %q", doc.Path)
-		}
-		if f.StoreRoot == "" && (doc.Current < 0 || doc.Current > len(doc.Versions)) {
-			return fmt.Errorf("document %s: current version %d outside embedded history", doc.Path, doc.Current)
-		}
-		docs[doc.Path] = true
+	docs, err := f.validateDocuments()
+	if err != nil {
+		return err
 	}
-	seen := make(map[string]bool)
-	for _, task := range f.Tasks {
-		if task.ID == "" || path.Base(task.ID) != task.ID || seen[task.ID] || task.Question == "" || len(task.Fields) == 0 {
-			return fmt.Errorf("invalid or duplicate task %q", task.ID)
-		}
-		seen[task.ID] = true
-		if err := f.validateRubric(task); err != nil {
+	scoped, err := f.validateTasks()
+	if err != nil {
+		return err
+	}
+	if f.StoreRoot != "" && scoped && f.Dataset == nil {
+		return errors.New("scoped copied fixture requires dataset.json")
+	}
+	if f.StoreRoot != "" && !scoped && f.Dataset != nil {
+		return errors.New("dataset.json requires scoped copied tasks")
+	}
+	for i := range f.Tasks {
+		if err := f.validateRubric(f.Tasks[i]); err != nil {
 			return err
 		}
 	}
@@ -128,10 +145,63 @@ func (f *Fixture) Validate() error {
 	return nil
 }
 
+func (f *Fixture) validateDocuments() (map[string]bool, error) {
+	docs := make(map[string]bool)
+	for i := range f.Documents {
+		doc := &f.Documents[i]
+		if !strings.HasPrefix(doc.Path, "/") || !strings.HasSuffix(doc.Path, ".md") || path.Clean(doc.Path) != doc.Path || docs[doc.Path] || len(doc.Versions) == 0 {
+			return nil, fmt.Errorf("invalid or duplicate document %q", doc.Path)
+		}
+		if f.StoreRoot == "" && doc.Current != 0 && doc.Current != len(doc.Versions) {
+			return nil, fmt.Errorf("document %s: current version %d is not the seeded latest revision", doc.Path, doc.Current)
+		}
+		docs[doc.Path] = true
+	}
+	return docs, nil
+}
+
+func (f *Fixture) validateTasks() (bool, error) {
+	seen := make(map[string]bool)
+	scoped := -1
+	for i := range f.Tasks {
+		task := &f.Tasks[i]
+		if task.ID == "" || path.Base(task.ID) != task.ID || seen[task.ID] || task.Category == "" || task.Question == "" || len(task.Fields) == 0 {
+			return false, fmt.Errorf("invalid or duplicate task %q", task.ID)
+		}
+		if task.Scope != "" && (!strings.HasPrefix(task.Scope, "/") || path.Clean(task.Scope) != task.Scope || strings.Contains(task.Scope, "\\")) {
+			return false, fmt.Errorf("task %s: invalid scope %q", task.ID, task.Scope)
+		}
+		isScoped := 0
+		if task.Scope != "" {
+			isScoped = 1
+		}
+		if scoped == -1 {
+			scoped = isScoped
+		} else if scoped != isScoped {
+			return false, errors.New("fixture cannot mix legacy and scoped tasks")
+		}
+		for field, kind := range task.Fields {
+			if field == "" || !validAnswerType(kind) {
+				return false, fmt.Errorf("task %s: invalid field/type %q=%q", task.ID, field, kind)
+			}
+		}
+		seen[task.ID] = true
+	}
+	return scoped == 1, nil
+}
+
 func (f *Fixture) validateRubric(task Task) error {
 	rubric, ok := f.Rubrics[task.ID]
 	if !ok {
 		return fmt.Errorf("task %s has no rubric", task.ID)
+	}
+	if task.Scope != "" {
+		if err := f.validateScopedRubric(task, &rubric); err != nil {
+			return err
+		}
+		if rubric.Outcome != "answered" {
+			return nil
+		}
 	}
 	if rubric.Abstain {
 		if len(rubric.Answer) != 0 || len(rubric.Evidence) != 0 || len(rubric.Supplemental) != 0 {
@@ -143,11 +213,15 @@ func (f *Fixture) validateRubric(task Task) error {
 		return fmt.Errorf("task %s: fields and rubric differ", task.ID)
 	}
 	for field := range task.Fields {
-		if _, ok := rubric.Answer[field]; !ok || len(rubric.Evidence[field]) == 0 {
+		answer, ok := rubric.Answer[field]
+		if !ok || len(rubric.Evidence[field]) == 0 {
 			return fmt.Errorf("task %s: missing answer/evidence for %s", task.ID, field)
 		}
+		if !answerMatchesType(answer, task.Fields[field]) {
+			return fmt.Errorf("task %s: answer for %s does not match %s", task.ID, field, task.Fields[field])
+		}
 		for _, evidence := range rubric.Evidence[field] {
-			if err := f.validateEvidence(task.ID, evidence); err != nil {
+			if err := f.validateEvidence(task, evidence); err != nil {
 				return err
 			}
 		}
@@ -157,23 +231,121 @@ func (f *Fixture) validateRubric(task Task) error {
 			return fmt.Errorf("task %s: supplemental evidence for unknown field %s", task.ID, field)
 		}
 		for _, e := range evidence {
-			if err := f.validateEvidence(task.ID, e); err != nil {
+			if err := f.validateEvidence(task, e); err != nil {
 				return err
 			}
+		}
+	}
+	for _, evidence := range rubric.Contradictions {
+		if err := f.validateEvidence(task, evidence); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (f *Fixture) validateEvidence(taskID string, evidence Evidence) error {
-	section, err := f.Section(evidence)
-	if err != nil {
-		return fmt.Errorf("task %s: %w", taskID, err)
+func (f *Fixture) validateScopedRubric(task Task, rubric *Rubric) error {
+	if rubric.Abstain || (rubric.Outcome != "answered" && rubric.Outcome != "not-found" && rubric.Outcome != "incomplete") {
+		return fmt.Errorf("task %s: scoped rubric requires an explicit outcome", task.ID)
 	}
-	if !section.Found || evidence.Quote == "" || !strings.Contains(section.Text, evidence.Quote) {
-		return fmt.Errorf("task %s: evidence not in source: %+v", taskID, evidence)
+	if rubric.Outcome == "answered" {
+		if len(rubric.Completion) == 0 {
+			return fmt.Errorf("task %s: answered rubric requires completion evidence", task.ID)
+		}
+	} else if len(rubric.Answer) != 0 || len(rubric.Evidence) != 0 || len(rubric.Supplemental) != 0 || len(rubric.Completion) == 0 {
+		return fmt.Errorf("task %s: %s rubric requires only completion evidence", task.ID, rubric.Outcome)
+	}
+	for i := range rubric.Completion {
+		if err := validateCompletion(task, rubric.Outcome, &rubric.Completion[i]); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func validateCompletion(task Task, outcome string, completion *Completion) error {
+	if completion.Step == "" || completion.Tool != "mark_lookup" || !withinScope(task.Scope, completion.URL) || completion.Query == "" {
+		return fmt.Errorf("task %s: invalid completion key", task.ID)
+	}
+	switch outcome {
+	case "answered":
+		if completion.Failure || completion.Status != "ok" || completion.Match != "body" || completion.Complete == nil || !*completion.Complete {
+			return fmt.Errorf("task %s: answered scope requires a complete body lookup", task.ID)
+		}
+	case "not-found":
+		if completion.Failure || completion.Status != "ok" || completion.Match != "body" || completion.Matches == nil || *completion.Matches != 0 {
+			return fmt.Errorf("task %s: absence requires a complete zero-result body lookup", task.ID)
+		}
+	case "incomplete":
+		if !completion.Failure && (completion.Complete == nil || *completion.Complete) {
+			return fmt.Errorf("task %s: incomplete outcome requires visible failure or partial scope", task.ID)
+		}
+	}
+	return nil
+}
+
+func (f *Fixture) scoringVersion() string {
+	if len(f.Tasks) > 0 && f.Tasks[0].Scope != "" {
+		return independentScoringVersion
+	}
+	return scoringVersion
+}
+
+func (f *Fixture) validateEvidence(task Task, evidence Evidence) error {
+	if evidence.Anchor == "" || !withinScope(task.Scope, evidence.Path) {
+		return fmt.Errorf("task %s: evidence lacks an anchor or escapes scope: %+v", task.ID, evidence)
+	}
+	section, err := f.Section(evidence)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", task.ID, err)
+	}
+	if !section.Found || evidence.Quote == "" || !strings.Contains(section.Text, evidence.Quote) {
+		return fmt.Errorf("task %s: evidence not in source: %+v", task.ID, evidence)
+	}
+	return nil
+}
+
+func validAnswerType(kind string) bool {
+	return kind == "string" || kind == "number" || kind == "boolean" || kind == "array of strings"
+}
+
+func answerMatchesType(raw json.RawMessage, kind string) bool {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch kind {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "array of strings":
+		values, ok := value.([]any)
+		if !ok {
+			return false
+		}
+		for _, item := range values {
+			if _, ok := item.(string); !ok {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func withinScope(scope, docPath string) bool {
+	if scope == "" || scope == "/" {
+		return strings.HasPrefix(docPath, "/")
+	}
+	scope = strings.TrimSuffix(scope, "/")
+	return docPath == scope || strings.HasPrefix(docPath, scope+"/")
 }
 
 // SectionResult retains document-relative ranges for nested-section provenance.

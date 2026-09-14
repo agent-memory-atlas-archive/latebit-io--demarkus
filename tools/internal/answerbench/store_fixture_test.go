@@ -23,7 +23,7 @@ func TestStoreFixturePreservesHistoryAndDetectsChanges(t *testing.T) {
 	}
 	questions := t.TempDir()
 	for name, body := range map[string]string{
-		"tasks.json":  `[{"id":"history","question":"What was the old limit?","fields":{"limit":"number"}}]`,
+		"tasks.json":  `[{"id":"history","category":"historical","question":"What was the old limit?","fields":{"limit":"number"}}]`,
 		"rubric.json": `{"history":{"answer":{"limit":3},"evidence":{"limit":[{"path":"/policy.md","version":1,"anchor":"limit","quote":"Keep 3 versions."}]}}}`,
 	} {
 		if err := os.WriteFile(filepath.Join(questions, name), []byte(body), 0o600); err != nil {

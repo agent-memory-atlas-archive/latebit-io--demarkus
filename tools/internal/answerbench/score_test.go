@@ -143,6 +143,10 @@ func TestReaderInputExcludesTaskCategoryAndAnswerKeys(t *testing.T) {
 	if strings.Contains(prompt, "PRIVATE") || prompt != "How long?\nAnswer fields and types: {\"days\":\"number\"}" {
 		t.Fatalf("unexpected reader input: %s", prompt)
 	}
+	prompt, err = taskPrompt(Task{ID: "PRIVATE-ID", Category: "PRIVATE-CATEGORY", Question: "How long?", Fields: map[string]string{"days": "number"}, Scope: "/allowed"})
+	if err != nil || prompt != "How long?\nAnswer fields and types: {\"days\":\"number\"}\nAllowed scope: /allowed\nSet outcome to answered, not-found only after a complete successful scope search, or incomplete when scope could not be completed. Keep abstain false for answered and true otherwise." {
+		t.Fatalf("scoped reader input changed: %s, %v", prompt, err)
+	}
 }
 
 func TestSupplementalSupportDoesNotReplaceRequiredEvidence(t *testing.T) {

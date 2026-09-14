@@ -5,6 +5,8 @@ import (
 	"maps"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/tools/internal/retrievalbench"
 )
 
 func eventLine(t *testing.T, kind, message, part string, extra map[string]any) string {
@@ -79,5 +81,39 @@ func TestFailedAnswersRemainInTokenNumerator(t *testing.T) {
 	attempts[1].Trace.UsageComplete = false
 	if summary := Summarize(attempts); summary.TokensPerCorrect != nil || summary.KnownTokens != 400 {
 		t.Fatalf("unknown spend must invalidate ratio, retaining known spend: %+v", summary)
+	}
+}
+
+func TestToolResultTokensIncludeReaderVisibleErrors(t *testing.T) {
+	counter, err := retrievalbench.NewO200kCounter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := Trace{Calls: []ToolCall{{Output: "partial output", Error: "scope failed"}}}
+	got, err := traceResultTokens(&trace, counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := counter.Count("partial output\nscope failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("result tokens=%d, want %d", got, want)
+	}
+}
+
+func TestMalformedTailRetainsObservedToolResult(t *testing.T) {
+	raw := eventLine(t, "tool_use", "m1", "p1", map[string]any{"tool": "fixture_mark_fetch", "state": map[string]any{"status": "completed", "output": "observed output"}}) + "not-json\n"
+	trace, err := ParseEvents(strings.NewReader(raw))
+	if err == nil || len(trace.Calls) != 1 || trace.Calls[0].Output != "observed output" {
+		t.Fatalf("partial trace=%+v err=%v", trace, err)
+	}
+	counter, err := retrievalbench.NewO200kCounter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens, err := traceResultTokens(&trace, counter); err != nil || tokens == 0 {
+		t.Fatalf("partial result tokens=%d err=%v", tokens, err)
 	}
 }

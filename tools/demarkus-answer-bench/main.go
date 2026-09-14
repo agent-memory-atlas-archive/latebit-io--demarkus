@@ -9,10 +9,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/internal/answerbench"
-	"github.com/latebit-io/demarkus/tools/internal/retrievalbench"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -45,13 +45,11 @@ func run() error {
 	if len(os.Args) > 1 && (os.Args[1] == "compare" || os.Args[1] == "compare-policies") {
 		return runCompare(os.Args[1], os.Args[2:])
 	}
-	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		return runMCP(ctx, os.Args[2:])
-	}
 	var cfg answerbench.Config
 	flag.StringVar(&cfg.OpenCode, "opencode", "opencode", "OpenCode 1.18.30 binary")
 	flag.StringVar(&cfg.Server, "server-bin", "server/bin/demarkus-server", "production server binary")
 	flag.StringVar(&cfg.MCP, "mcp-bin", "client/bin/demarkus-mcp", "production MCP binary")
+	flag.StringVar(&cfg.Proxy, "proxy-bin", "tools/bin/demarkus-answer-proxy", "key-free answer proxy binary")
 	flag.StringVar(&cfg.Output, "out", "", "new output directory (required)")
 	flag.StringVar(&cfg.Temp, "temp", "", "temporary work parent; OS default when empty")
 	flag.StringVar(&cfg.Model, "model", "openai/gpt-6-astra", "fixed provider/model")
@@ -70,7 +68,7 @@ func run() error {
 		return fmt.Errorf("-out is required")
 	}
 	var err error
-	for _, binary := range []*string{&cfg.OpenCode, &cfg.Server, &cfg.MCP} {
+	for _, binary := range []*string{&cfg.OpenCode, &cfg.Server, &cfg.MCP, &cfg.Proxy} {
 		*binary, err = exec.LookPath(*binary)
 		if err != nil {
 			return err
@@ -80,7 +78,7 @@ func run() error {
 			return err
 		}
 	}
-	cfg.Proxy, err = os.Executable()
+	cfg.Runner, err = os.Executable()
 	if err != nil {
 		return err
 	}
@@ -96,27 +94,6 @@ func run() error {
 		return fmt.Errorf("incomplete provider usage; tokens-per-correct is unavailable")
 	}
 	return nil
-}
-
-func runMCP(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
-	binary := flags.String("mcp-bin", "", "production MCP binary")
-	host := flags.String("host", "", "fixture host:port")
-	dial := flags.String("dial-address", "", "network route for the frozen origin")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("mcp takes flags only; unexpected argument %q", flags.Arg(0))
-	}
-	if *binary == "" || *host == "" {
-		return fmt.Errorf("mcp requires -mcp-bin and -host")
-	}
-	childArgs := []string{"-host", "mark://" + *host, "-insecure", "-no-cache"}
-	if *dial != "" {
-		childArgs = append(childArgs, "-dial-address", *dial)
-	}
-	return answerbench.ServeProxy(ctx, retrievalbench.StdioConfig{Command: *binary, Args: childArgs, Env: os.Environ()}, *host)
 }
 
 func runCompare(command string, args []string) error {

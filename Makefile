@@ -69,6 +69,7 @@ tools: protocol
 answer-bench:
 	go build -C server -o bin/demarkus-server ./cmd/demarkus-server
 	go build -C client -o bin/demarkus-mcp ./cmd/demarkus-mcp
+	go build -C tools -o bin/demarkus-answer-proxy ./demarkus-answer-proxy
 	go build -C tools -o bin/demarkus-answer-bench ./demarkus-answer-bench
 
 # Build container images. One image per deployable service so each pod

@@ -106,7 +106,7 @@ func TestEmbeddedCurrentRevisionValidation(t *testing.T) {
 				f.Documents[i].Current = current
 			}
 		}
-		if err := f.Validate(); (err != nil) != (current < 0 || current > 2) {
+		if err := f.Validate(); (err != nil) != (current != 0 && current != 2) {
 			t.Errorf("current=%d error=%v", current, err)
 		}
 	}

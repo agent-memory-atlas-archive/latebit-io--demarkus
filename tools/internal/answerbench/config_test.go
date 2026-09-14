@@ -7,7 +7,7 @@ import (
 )
 
 func TestReaderConfigAndEnvironmentIsolation(t *testing.T) {
-	raw, err := readerConfig(&Config{Port: 16319, Steps: 8, MCP: "/mcp", Proxy: "/proxy"}, "/fresh-session")
+	raw, err := readerConfig(&Config{Port: 16319, Steps: 8, MCP: "/mcp", Proxy: "/proxy", tokenFile: "/private/capability"}, "/fresh-session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,6 +23,9 @@ func TestReaderConfigAndEnvironmentIsolation(t *testing.T) {
 	}
 	if config.Permission["*"] != "deny" || config.Permission["fixture_*"] != "allow" || len(config.MCP) != 1 || config.MCP["fixture"].Environment["HOME"] != "/fresh-session" {
 		t.Fatalf("reader escaped fixture isolation: %s", raw)
+	}
+	if strings.Contains(string(raw), "raw-secret") || !strings.Contains(string(raw), "/private/capability") {
+		t.Fatalf("reader configuration exposed capability or omitted capability file: %s", raw)
 	}
 	env := cleanEnv([]string{"PATH=/bin", "OPENCODE_CONFIG_CONTENT=private", "OPENCODE_EXPERIMENTAL=1", "DEMARKUS_AUTH=private", "XDG_CONFIG_HOME=/private"})
 	if strings.Join(env, ";") != "PATH=/bin" {

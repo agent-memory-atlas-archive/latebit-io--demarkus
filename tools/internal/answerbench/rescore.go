@@ -3,6 +3,7 @@ package answerbench
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 // Rescore keeps original traces and spend, recording the prior report's digest.
@@ -24,11 +25,23 @@ func RescoreWithFixture(beforePath, outputPath string, f *Fixture) (report Repor
 	if err := decodeJSON(raw, &report); err != nil {
 		return report, err
 	}
+	if err := validateReport(&report); err != nil {
+		return report, err
+	}
 	if report.MetricsOnly {
 		return report, fmt.Errorf("metrics-only reports cannot be rescored; use the private original trace")
 	}
 	if report.Spec.Hashes["corpus"] != f.Hashes["corpus"] || report.Spec.Hashes["tasks"] != f.Hashes["tasks"] {
 		return report, fmt.Errorf("rescore requires the original corpus and tasks")
+	}
+	if (f.Dataset != nil) != (report.Spec.Dataset != "") {
+		return report, fmt.Errorf("rescore requires the original dataset contract")
+	}
+	if f.Dataset != nil && (report.Spec.Origin != f.Dataset.Source || policyName(report.Spec.ReaderPolicy) != policyName(f.Dataset.ReaderPolicy) || report.Lifecycle.ToolProfile != f.Dataset.ToolProfile) {
+		return report, fmt.Errorf("rescore dataset reader contract differs from original report")
+	}
+	if f.Dataset != nil && report.Spec.ReaderContractHash != f.Dataset.ReaderContractSHA256 {
+		return report, fmt.Errorf("rescore reader contract hash differs from dataset")
 	}
 	complete := report.Summary.UsageComplete
 	cfg := Config{Origin: report.Spec.Origin, Port: report.Spec.Port}
@@ -40,8 +53,24 @@ func RescoreWithFixture(beforePath, outputPath string, f *Fixture) (report Repor
 		}
 	}
 	report.Spec.Hashes["rubric"] = f.Hashes["rubric"]
-	report.Spec.ScoringVersion = scoringVersion
+	report.Spec.ScoringVersion = f.scoringVersion()
+	if f.Dataset != nil {
+		report.Spec.Dataset = f.Dataset.ID
+		report.Spec.DatasetHash = f.Hashes["dataset"]
+		report.Spec.Hashes["dataset"] = f.Hashes["dataset"]
+	}
 	report.RescoredFrom = digest(raw)
+	now := time.Now().UTC()
+	report.RescoredAt = &now
+	executable, execErr := os.Executable()
+	if execErr != nil {
+		return report, execErr
+	}
+	binary, readErr := os.ReadFile(executable)
+	if readErr != nil {
+		return report, readErr
+	}
+	report.ScorerHash = digest(binary)
 	report.summarize()
 	if !complete || len(report.Attempts) != report.Spec.ExpectedAttempts {
 		report.Summary.UsageComplete = false

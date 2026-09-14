@@ -15,12 +15,12 @@ func policyReport(t *testing.T, name string) Report {
 		t.Fatal(err)
 	}
 	r.Spec.PromptHash = digest([]byte(prompt))
-	raw, err := readerConfig(&Config{Proxy: "<runner>", MCP: "<mcp>", Port: 16319, Steps: 8, ReaderPolicy: name}, "<session>")
+	raw, err := readerConfig(&Config{Proxy: "<runner>", MCP: "<mcp>", Port: 16319, Steps: 8, ReaderPolicy: name, legacyProxy: true}, "<session>")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Spec.ConfigHash = digest(raw)
-	r.Binaries = map[string]string{"server": "same-server", "mcp": "same-mcp"}
+	r.Binaries = map[string]string{"server": "same-server", "mcp": "same-mcp", "runner": "same-runner"}
 	return r
 }
 

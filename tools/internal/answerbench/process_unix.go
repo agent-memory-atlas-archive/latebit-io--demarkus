@@ -24,3 +24,29 @@ func child(ctx context.Context, binary string, args ...string) *exec.Cmd {
 	cmd.WaitDelay = 3 * time.Second
 	return cmd
 }
+
+func killChild(cmd *exec.Cmd) error {
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
+}
+
+func terminateChild(cmd *exec.Cmd) error {
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
+}
+
+func ownProcessTree(*exec.Cmd) (func() error, error) {
+	return func() error { return nil }, nil
+}

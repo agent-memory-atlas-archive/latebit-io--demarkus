@@ -1,15 +1,36 @@
 package answerbench
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func comparisonReport() Report {
-	r := Report{Spec: RunSpec{Suite: "test", Model: "fixed/model", Repeats: 1, ExpectedAttempts: 2, ScoringVersion: scoringVersion}}
+	r := Report{Generated: time.Now(), Spec: RunSpec{Suite: "test", Model: "fixed/model", Repeats: 1, ExpectedAttempts: 2, ScoringVersion: scoringVersion}}
 	r.Attempts = []Attempt{
-		{Task: "q1", Repeat: 1, Trace: Trace{Usage: Usage{Input: 100}, UsageComplete: true}, Score: Score{Correct: true}},
-		{Task: "q2", Repeat: 1, Trace: Trace{Usage: Usage{Input: 100}, UsageComplete: true}, Score: Score{Correct: true}},
+		{Task: "q1", Category: "direct", Repeat: 1, Trace: Trace{Usage: Usage{Input: 100}, UsageComplete: true}, Score: Score{Correct: true}},
+		{Task: "q2", Category: "direct", Repeat: 1, Trace: Trace{Usage: Usage{Input: 100}, UsageComplete: true}, Score: Score{Correct: true}},
 	}
-	r.Summary = Summarize(r.Attempts)
+	r.summarize()
 	return r
+}
+
+func TestComparisonRequiresIdenticalVerifiedRescorer(t *testing.T) {
+	before, after := comparisonReport(), comparisonReport()
+	now := time.Now()
+	for _, report := range []*Report{&before, &after} {
+		report.RescoredFrom = "source"
+		report.RescoredAt = &now
+		report.ScorerHash = "scorer"
+	}
+	after.ScorerHash = "other"
+	if _, err := Compare(&before, &after); err == nil {
+		t.Fatal("different rescorer implementations compared")
+	}
+	after.ScorerHash = "scorer"
+	if _, err := Compare(&before, &after); err != nil {
+		t.Fatalf("identical verified rescorers rejected: %v", err)
+	}
 }
 
 func TestComparisonProtectsAccuracyAndComparability(t *testing.T) {
@@ -27,10 +48,12 @@ func TestComparisonProtectsAccuracyAndComparability(t *testing.T) {
 		{"incomplete-usage", func(r *Report) { r.Attempts[1].Trace.UsageComplete = false }, true, false},
 		{"partial-cohort", func(r *Report) { r.Attempts = r.Attempts[:1] }, true, false},
 		{"duplicate-attempt", func(r *Report) { r.Attempts[1].Task = "q1" }, true, false},
+		{"changed-category", func(r *Report) { r.Attempts[0].Category = "other" }, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before, after := comparisonReport(), comparisonReport()
 			tc.mutate(&after)
+			after.summarize()
 			comparison, err := Compare(&before, &after)
 			if (err != nil) != tc.wantError || comparison.ImprovedPointEstimate != tc.improved {
 				t.Fatalf("comparison=%+v err=%v", comparison, err)

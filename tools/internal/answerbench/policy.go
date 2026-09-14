@@ -34,7 +34,8 @@ func policyPrompt(name string) (string, error) {
 	}
 }
 
-func verifyPolicyConfig(spec *RunSpec) error {
+func verifyPolicyConfig(report *Report) error {
+	spec := &report.Spec
 	prompt, err := policyPrompt(spec.ReaderPolicy)
 	if err != nil {
 		return err
@@ -42,9 +43,15 @@ func verifyPolicyConfig(spec *RunSpec) error {
 	if spec.PromptHash != digest([]byte(prompt)) {
 		return fmt.Errorf("reader prompt does not match its named policy")
 	}
-	cfg := Config{Proxy: "<runner>", MCP: "<mcp>", Origin: spec.Origin, Port: spec.Port, Steps: spec.Steps, ReaderPolicy: spec.ReaderPolicy}
+	cfg := Config{Proxy: "<runner>", MCP: "<mcp>", Origin: spec.Origin, Port: spec.Port, Steps: spec.Steps, ReaderPolicy: spec.ReaderPolicy, legacyProxy: true}
+	if report.Format == reportFormatV2 {
+		cfg.Proxy, cfg.legacyProxy = "<proxy>", false
+		cfg.tokenFile = "<run-capability-file>"
+	}
 	switch spec.Suite {
 	case "soul-answer-v1":
+		cfg.Corpus = "<snapshot>"
+	case "independent-answer-v1":
 		cfg.Corpus = "<snapshot>"
 	case "graph-answer-v1":
 	default:
@@ -64,11 +71,18 @@ func verifyPolicyConfig(spec *RunSpec) error {
 // model, corpus, scoring, and all other experiment settings fixed.
 func ComparePolicies(before, after *Report) (Comparison, error) {
 	for _, report := range []*Report{before, after} {
-		if err := verifyPolicyConfig(&report.Spec); err != nil {
+		if err := validateReport(report); err != nil {
+			return Comparison{}, err
+		}
+		if err := verifyPolicyConfig(report); err != nil {
 			return Comparison{}, err
 		}
 	}
-	for _, binary := range []string{"server", "mcp"} {
+	binaries := []string{"server", "mcp", "runner"}
+	if before.Format == reportFormatV2 || after.Format == reportFormatV2 {
+		binaries = append(binaries, "proxy")
+	}
+	for _, binary := range binaries {
 		if before.Binaries[binary] == "" || before.Binaries[binary] != after.Binaries[binary] {
 			return Comparison{}, fmt.Errorf("%s binary differs; policy-only comparison requires identical retrieval software", binary)
 		}
@@ -77,7 +91,7 @@ func ComparePolicies(before, after *Report) (Comparison, error) {
 	b.Spec.ReaderPolicy, a.Spec.ReaderPolicy = "", ""
 	b.Spec.PromptHash, a.Spec.PromptHash = "", ""
 	b.Spec.ConfigHash, a.Spec.ConfigHash = "", ""
-	c, err := Compare(&b, &a)
+	c, err := compare(&b, &a)
 	if err != nil {
 		return c, err
 	}
@@ -109,13 +123,34 @@ func reportResultTokens(report *Report) (int, error) {
 	}
 	total := 0
 	for i := range report.Attempts {
-		for _, call := range report.Attempts[i].Trace.Calls {
-			n, err := counter.Count(call.Output)
-			if err != nil {
-				return 0, err
-			}
-			total += n
+		if report.Format == reportFormatV2 {
+			total += report.Attempts[i].ResultTokens
+			continue
 		}
+		n, err := traceResultTokens(&report.Attempts[i].Trace, counter)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+func traceResultTokens(trace *Trace, counter retrievalbench.TokenCounter) (int, error) {
+	total := 0
+	for _, call := range trace.Calls {
+		text := call.Output
+		if call.Error != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += call.Error
+		}
+		n, err := counter.Count(text)
+		if err != nil {
+			return 0, err
+		}
+		total += n
 	}
 	return total, nil
 }

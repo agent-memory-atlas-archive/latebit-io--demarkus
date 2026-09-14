@@ -38,7 +38,7 @@ func TestKnownStorageFailuresPropagateThroughScoringAndRescore(t *testing.T) {
 	f, _ := storedEvidenceFixture(t)
 	trace := validAnswerTrace(t, &f, "q1")
 	trace.Usage.Input = 100
-	report := Report{Spec: RunSpec{Hashes: f.Hashes, Port: 16319, ExpectedAttempts: 1}, Attempts: []Attempt{{Task: "q1", Trace: trace}}}
+	report := Report{Generated: time.Now(), Spec: RunSpec{Suite: "graph-answer-v1", Hashes: f.Hashes, Port: 16319, Repeats: 1, ExpectedAttempts: 1}, Attempts: []Attempt{{Task: "q1", Category: "direct", Repeat: 1, Trace: trace}}}
 	report.summarize()
 	before, after := filepath.Join(t.TempDir(), "before.json"), filepath.Join(t.TempDir(), "after.json")
 	if err := writeNewJSON(before, report); err != nil {
@@ -88,7 +88,7 @@ func TestRunSurfacesLostIndexBeforeReadiness(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{OpenCode: bin, Server: bin, MCP: bin, Proxy: bin, Corpus: f.StoreRoot, Questions: questions, Origin: "mark://fixture", Port: 16319, Model: "fixed/model", Steps: 1, Repeats: 1, Timeout: time.Second, Output: filepath.Join(t.TempDir(), "run"), Temp: t.TempDir()}
+	cfg := Config{OpenCode: bin, Server: bin, MCP: bin, Runner: bin, Proxy: bin, Corpus: f.StoreRoot, Questions: questions, Origin: "mark://fixture", Port: 16319, Model: "fixed/model", Steps: 1, Repeats: 1, Timeout: time.Second, Output: filepath.Join(t.TempDir(), "run"), Temp: t.TempDir()}
 	report, err := Run(t.Context(), &cfg)
 	if err == nil || !strings.Contains(err.Error(), "read frozen source /index.md/v1") || strings.Contains(err.Error(), "did not start") {
 		t.Fatalf("lost index misreported: %v", err)
