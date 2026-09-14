@@ -197,22 +197,28 @@ func completionObserved(expected []Completion, trace *Trace) bool {
 	if len(expected) == 0 {
 		return false
 	}
+	used := make([]bool, len(trace.Calls))
 	for i := range expected {
-		if !completionStepObserved(&expected[i], trace) {
+		call, found := completionStepObserved(&expected[i], trace, used)
+		if !found {
 			return false
 		}
+		used[call] = true
 	}
 	return true
 }
 
-func completionStepObserved(completion *Completion, trace *Trace) bool {
+func completionStepObserved(completion *Completion, trace *Trace, used []bool) (int, bool) {
 	for i := range trace.Calls {
+		if used[i] {
+			continue
+		}
 		call := &trace.Calls[i]
 		if completionCallMatches(completion, call) && completionResultMatches(completion, call) {
-			return true
+			return i, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 func completionCallMatches(completion *Completion, call *ToolCall) bool {
@@ -282,7 +288,9 @@ func (f *Fixture) assessCitations(answer *Answer, rubric *Rubric, trace *Trace, 
 	for _, citation := range answer.Citations {
 		e, err := location(citation.URL, host)
 		if err != nil || e.Version == 0 || e.Anchor == "" || citation.Quote == "" {
-			return citationAssessment{reasons: []string{"citation lacks valid immutable source/section/quote"}}, nil
+			assessment.valid = false
+			assessment.reasons = append(assessment.reasons, "citation lacks valid immutable source/section/quote")
+			continue
 		}
 		section, err := f.Section(e)
 		if err != nil {
@@ -290,10 +298,14 @@ func (f *Fixture) assessCitations(answer *Answer, rubric *Rubric, trace *Trace, 
 		}
 		quote := normalize(citation.Quote)
 		if !section.Found || !strings.Contains(normalize(section.Text), quote) {
-			return citationAssessment{reasons: []string{"quote absent from cited source section"}}, nil
+			assessment.valid = false
+			assessment.reasons = append(assessment.reasons, "quote absent from cited source section")
+			continue
 		}
 		if !observedQuote(observed, e, quote) {
-			return citationAssessment{reasons: []string{"quoted section evidence was not returned to reader"}}, nil
+			assessment.valid = false
+			assessment.reasons = append(assessment.reasons, "quoted section evidence was not returned to reader")
+			continue
 		}
 		supports := false
 		for i, required := range rubric.Evidence[citation.Field] {
@@ -308,7 +320,8 @@ func (f *Fixture) assessCitations(answer *Answer, rubric *Rubric, trace *Trace, 
 			}
 		}
 		if !supports {
-			return citationAssessment{reasons: []string{"citation does not support its answer field"}}, nil
+			assessment.valid = false
+			assessment.reasons = append(assessment.reasons, "citation does not support its answer field")
 		}
 	}
 	fields := make([]string, 0, len(rubric.Evidence))

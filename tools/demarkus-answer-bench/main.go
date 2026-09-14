@@ -147,9 +147,12 @@ func runRescore(ctx context.Context, args []string) error {
 	if flags.NArg() != 2 || (*corpus == "") != (*questions == "") {
 		return fmt.Errorf("usage: rescore [-corpus ROOT -questions DIR] ORIGINAL.json NEW.json")
 	}
-	f, err := answerbench.LoadFixture()
+	var f answerbench.Fixture
+	var err error
 	if *corpus != "" {
 		f, err = answerbench.LoadStoreFixture(ctx, *corpus, *questions)
+	} else {
+		f, err = answerbench.LoadFixture()
 	}
 	if err != nil {
 		return err

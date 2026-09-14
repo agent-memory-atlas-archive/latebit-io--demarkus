@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build darwin || linux
 
 package answerbench
 
@@ -34,6 +34,9 @@ func TestManagedProcessKillsDescendants(t *testing.T) {
 			}
 			break
 		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			t.Fatal(readErr)
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if pid == 0 {
@@ -46,6 +49,9 @@ func TestManagedProcessKillsDescendants(t *testing.T) {
 		err = syscall.Kill(pid, 0)
 		if errors.Is(err, syscall.ESRCH) {
 			return
+		}
+		if err != nil {
+			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

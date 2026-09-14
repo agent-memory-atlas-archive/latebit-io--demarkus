@@ -1,6 +1,7 @@
 package answerbench
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,5 +63,26 @@ func TestCopiedFixtureRejectsScorerFilesUnderServedRoot(t *testing.T) {
 	}
 	if _, err := LoadStoreFixture(t.Context(), root, questions); err == nil || !strings.Contains(err.Error(), "outside served corpus") {
 		t.Fatalf("reader-accessible scorer directory error=%v", err)
+	}
+}
+
+func TestScopedRubricValidatesContradictionsForEveryOutcome(t *testing.T) {
+	f := testFixture(t)
+	task := Task{ID: "absence", Category: "absent", Question: "Missing?", Fields: map[string]string{"value": "string"}, Scope: "/"}
+	zero := 0
+	f.Tasks = []Task{task}
+	f.Rubrics = map[string]Rubric{"absence": {
+		Outcome: "not-found", Answer: map[string]json.RawMessage{}, Evidence: map[string][]Evidence{},
+		Completion:     []Completion{{Step: "search", Tool: "mark_lookup", URL: "/", Query: "missing", Match: "body", Status: "ok", Matches: &zero}},
+		Contradictions: []Evidence{{Path: "/missing.md", Version: 1, Anchor: "claim", Quote: "missing"}},
+	}}
+	if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "evidence not in source") {
+		t.Fatalf("invalid non-answer contradiction accepted: %v", err)
+	}
+}
+
+func TestWithinScopeNormalizesPaths(t *testing.T) {
+	if withinScope("/team", "/team/../private/key.md") || !withinScope("/team/./docs", "/team/docs/a.md") {
+		t.Fatal("scope path normalization accepted escape or rejected child")
 	}
 }

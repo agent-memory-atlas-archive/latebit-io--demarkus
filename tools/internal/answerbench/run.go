@@ -335,7 +335,9 @@ func Run(ctx context.Context, cfg *Config) (report Report, err error) {
 			report.Lifecycle.ServerStayedUp = true
 		}
 		if stopErr != nil {
-			report.Lifecycle.Failure = "cleanup"
+			if report.Lifecycle.Failure == "" {
+				report.Lifecycle.Failure = "cleanup"
+			}
 			err = errors.Join(err, fmt.Errorf("stop fixture server: %w", stopErr))
 		} else {
 			report.Lifecycle.CleanupVerified = true
@@ -352,9 +354,12 @@ func Run(ctx context.Context, cfg *Config) (report Report, err error) {
 }
 
 func loadRunFixture(ctx context.Context, cfg *Config) (Fixture, error) {
-	f, err := LoadFixture()
+	var f Fixture
+	var err error
 	if cfg.Corpus != "" {
 		f, err = LoadStoreFixture(ctx, cfg.Corpus, cfg.Questions)
+	} else {
+		f, err = LoadFixture()
 	}
 	if err != nil {
 		return f, err

@@ -200,7 +200,7 @@ func (f *Fixture) validateRubric(task Task) error {
 			return err
 		}
 		if rubric.Outcome != "answered" {
-			return nil
+			return f.validateContradictions(task, &rubric)
 		}
 	}
 	if rubric.Abstain {
@@ -236,6 +236,10 @@ func (f *Fixture) validateRubric(task Task) error {
 			}
 		}
 	}
+	return f.validateContradictions(task, &rubric)
+}
+
+func (f *Fixture) validateContradictions(task Task, rubric *Rubric) error {
 	for _, evidence := range rubric.Contradictions {
 		if err := f.validateEvidence(task, evidence); err != nil {
 			return err
@@ -341,10 +345,14 @@ func answerMatchesType(raw json.RawMessage, kind string) bool {
 }
 
 func withinScope(scope, docPath string) bool {
-	if scope == "" || scope == "/" {
-		return strings.HasPrefix(docPath, "/")
+	if !strings.HasPrefix(docPath, "/") {
+		return false
 	}
-	scope = strings.TrimSuffix(scope, "/")
+	docPath = path.Clean(docPath)
+	if scope == "" || scope == "/" {
+		return true
+	}
+	scope = strings.TrimSuffix(path.Clean(scope), "/")
 	return docPath == scope || strings.HasPrefix(docPath, scope+"/")
 }
 

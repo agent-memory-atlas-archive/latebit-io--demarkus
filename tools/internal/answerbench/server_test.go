@@ -97,6 +97,7 @@ func TestOwnedReadinessRequiresChildStartupAndLiveness(t *testing.T) {
 		ok   bool
 	}{
 		{name: "owned", log: startup, ok: true},
+		{name: "owned-after-malformed", log: append([]byte("not-json\n"), startup...), ok: true},
 		{name: "matching-orphan", log: []byte(`{"msg":"lookup catalog built"}`)},
 		{name: "owned-child-exited", log: startup, exit: true},
 	} {
@@ -121,6 +122,12 @@ func TestOwnedReadinessRequiresChildStartupAndLiveness(t *testing.T) {
 				t.Fatalf("readiness error=%v, want success=%t", err, tc.ok)
 			}
 		})
+	}
+}
+
+func TestOwnedStartupReturnsMalformedLogErrorWithoutValidRecord(t *testing.T) {
+	if ok, err := hasOwnedStartup([]byte("not-json\n"), t.TempDir(), "127.0.0.1:16319"); ok || err == nil || !strings.Contains(err.Error(), "parse fixture startup log") {
+		t.Fatalf("owned startup=%t error=%v", ok, err)
 	}
 }
 

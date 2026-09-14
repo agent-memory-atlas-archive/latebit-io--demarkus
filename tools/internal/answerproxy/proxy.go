@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"slices"
@@ -52,9 +53,9 @@ func Serve(ctx context.Context, cfg mcpstdio.Config, host, scope string) (err er
 		tool := &tools[i]
 		server.AddTool(*tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			args := req.GetArguments()
-			raw, ok := args["url"].(string)
-			if !ok {
-				return mcp.NewToolResultError("url is required"), nil
+			raw, err := readerURL(tool.Name, args, host)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
 			}
 			loc, err := parseLocation(raw, host)
 			if err != nil || strings.Contains(loc.path, "..") || strings.Contains(loc.path, "\\") {
@@ -73,7 +74,20 @@ func Serve(ctx context.Context, cfg mcpstdio.Config, host, scope string) (err er
 			return mcp.NewToolResultText(result.Text), nil
 		})
 	}
-	return mcpserver.ServeStdio(server)
+	stdio := mcpserver.NewStdioServer(server)
+	return stdio.Listen(ctx, os.Stdin, os.Stdout)
+}
+
+func readerURL(tool string, args map[string]any, host string) (string, error) {
+	raw, exists := args["url"]
+	if !exists && tool == "mark_discover" {
+		return "mark://" + host + "/.well-known/agent-manifest.md", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", errors.New("url is required")
+	}
+	return value, nil
 }
 
 func selectReaderTools(tools []mcp.Tool, host, scope string) ([]mcp.Tool, error) {

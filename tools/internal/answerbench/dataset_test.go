@@ -45,6 +45,7 @@ func TestDatasetManifestPinsEveryIndependentInput(t *testing.T) {
 		{"manifest", func(d *DatasetManifest) { d.ArchiveManifestSHA256 = digest([]byte("other")) }},
 		{"scorer", func(d *DatasetManifest) { d.ScoringVersion = scoringVersion }},
 		{"profile", func(d *DatasetManifest) { d.ToolProfile = "legacy-read-v1" }},
+		{"id", func(d *DatasetManifest) { d.ID = "other" }},
 		{"source", func(d *DatasetManifest) { d.Source = "https://example.com" }},
 		{"reader", func(d *DatasetManifest) { d.ReaderContractSHA256 = digest([]byte("other")) }},
 		{"authored", func(d *DatasetManifest) { d.Authored = "soon" }},

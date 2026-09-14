@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/internal/answerproxy"
 	"github.com/latebit-io/demarkus/tools/internal/mcpstdio"
@@ -20,7 +21,7 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	binary := flag.String("mcp-bin", "", "production MCP binary")
 	host := flag.String("host", "", "fixture host:port")

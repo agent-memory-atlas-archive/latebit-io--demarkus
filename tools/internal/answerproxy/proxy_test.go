@@ -75,3 +75,16 @@ func TestToolProfileRejectsMissingDuplicateAndInvalidScope(t *testing.T) {
 		})
 	}
 }
+
+func TestReaderURLDefaultsOnlyDiscover(t *testing.T) {
+	got, err := readerURL("mark_discover", map[string]any{}, "world.example")
+	if err != nil || got != "mark://world.example/.well-known/agent-manifest.md" {
+		t.Fatalf("discover url=%q err=%v", got, err)
+	}
+	if _, err := readerURL("mark_fetch", map[string]any{}, "world.example"); err == nil {
+		t.Fatal("fetch accepted missing URL")
+	}
+	if _, err := readerURL("mark_discover", map[string]any{"url": 42}, "world.example"); err == nil {
+		t.Fatal("discover accepted invalid URL type")
+	}
+}

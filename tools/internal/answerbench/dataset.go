@@ -82,8 +82,13 @@ func validateDataset(dataset *DatasetManifest, manifest *CorpusManifest, fixture
 	if _, err := time.Parse(time.DateOnly, dataset.Authored); err != nil {
 		return errors.New("answer dataset requires an authoring date")
 	}
-	if manifest.Source != dataset.Source || manifest.CorpusSHA256 != dataset.CorpusSHA256 || manifest.Documents != len(fixture.storedVersions) || manifest.ActiveDocuments != len(fixture.Documents) || manifest.Versions != fixture.VersionCount {
+	if !corpusManifestMatches(dataset, manifest, fixture) {
 		return errors.New("answer dataset corpus manifest mismatch")
 	}
 	return nil
+}
+
+func corpusManifestMatches(dataset *DatasetManifest, manifest *CorpusManifest, fixture *Fixture) bool {
+	return manifest.ID == dataset.ID && manifest.Source == dataset.Source && manifest.CorpusSHA256 == dataset.CorpusSHA256 &&
+		manifest.Documents == len(fixture.storedVersions) && manifest.ActiveDocuments == len(fixture.Documents) && manifest.Versions == fixture.VersionCount
 }

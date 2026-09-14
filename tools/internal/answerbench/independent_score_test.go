@@ -70,6 +70,24 @@ func TestIndependentScoreSeparatesAnswerEvidenceAndCitations(t *testing.T) {
 	}
 }
 
+func TestIndependentScoreKeepsEvidenceDimensionWithExtraInvalidCitation(t *testing.T) {
+	f, _, trace := scopedAnswerFixture(t, "q2")
+	var answer Answer
+	if err := json.Unmarshal([]byte(trace.Final), &answer); err != nil {
+		t.Fatal(err)
+	}
+	answer.Citations = append(answer.Citations, Citation{Field: "days", URL: "outside"})
+	raw, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Final = string(raw)
+	score, err := f.Score("q2", &trace, "127.0.0.1:16319")
+	if err != nil || score.Correct || !score.AnswerCorrect || !score.EvidenceSufficient || score.CitationsValid || !score.ScopeComplete {
+		t.Fatalf("invalid extra citation collapsed dimensions: score=%+v err=%v", score, err)
+	}
+}
+
 func TestIndependentAbsenceRequiresCompleteSuccessfulScope(t *testing.T) {
 	f := testFixture(t)
 	task := Task{ID: "absence", Category: "absent", Question: "What is the pager?", Fields: map[string]string{"pager": "string"}, Scope: "/"}
@@ -90,6 +108,23 @@ func TestIndependentAbsenceRequiresCompleteSuccessfulScope(t *testing.T) {
 	if err != nil || !score.Correct || !score.ScopeComplete {
 		t.Fatalf("complete absence score=%+v, err=%v", score, err)
 	}
+	rubric := f.Rubrics["absence"]
+	second := rubric.Completion[0]
+	second.Step = "confirm"
+	rubric.Completion = append(rubric.Completion, second)
+	f.Rubrics["absence"] = rubric
+	score, err = f.Score("absence", &trace, "127.0.0.1:16319")
+	if err != nil || score.Correct || score.ScopeComplete {
+		t.Fatalf("one call satisfied multiple completion steps: score=%+v err=%v", score, err)
+	}
+	trace.Calls = append(trace.Calls, trace.Calls[0])
+	score, err = f.Score("absence", &trace, "127.0.0.1:16319")
+	if err != nil || !score.Correct || !score.ScopeComplete {
+		t.Fatalf("distinct completion calls rejected: score=%+v err=%v", score, err)
+	}
+	trace.Calls = trace.Calls[:1]
+	rubric.Completion = rubric.Completion[:1]
+	f.Rubrics["absence"] = rubric
 	trace.Calls[0].Error = "lookup failed"
 	score, err = f.Score("absence", &trace, "127.0.0.1:16319")
 	if err != nil {

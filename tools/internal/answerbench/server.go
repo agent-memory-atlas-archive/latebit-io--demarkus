@@ -172,6 +172,7 @@ func hasOwnedStartup(raw []byte, root, host string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("invalid expected fixture address %q", host)
 	}
+	var parseErr error
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if line == "" {
 			continue
@@ -182,7 +183,10 @@ func hasOwnedStartup(raw []byte, root, host string) (bool, error) {
 			Addr    string `json:"addr"`
 		}
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			return false, fmt.Errorf("parse fixture startup log: %w", err)
+			if parseErr == nil {
+				parseErr = fmt.Errorf("parse fixture startup log: %w", err)
+			}
+			continue
 		}
 		if record.Message != "server started" {
 			continue
@@ -202,5 +206,5 @@ func hasOwnedStartup(raw []byte, root, host string) (bool, error) {
 		}
 		return true, nil
 	}
-	return false, nil
+	return false, parseErr
 }
