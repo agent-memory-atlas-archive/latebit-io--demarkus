@@ -3,6 +3,7 @@ package answerbench
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +154,39 @@ func TestIndependentIncompleteOutcomeNeedsVisibleFailure(t *testing.T) {
 	score, err = f.Score("incomplete", &trace, "127.0.0.1:16319")
 	if err != nil || score.Correct || score.EvidenceSufficient {
 		t.Fatalf("malformed empty result established failure: score=%+v err=%v", score, err)
+	}
+}
+
+func TestIndependentCompletionMatchingFindsCompleteAssignment(t *testing.T) {
+	f := testFixture(t)
+	task := Task{ID: "overlap", Category: "incomplete-scope", Question: "What is outside this scope?", Fields: map[string]string{"value": "string"}, Scope: "/limited"}
+	f.Tasks = []Task{task}
+	f.Rubrics = map[string]Rubric{"overlap": {
+		Outcome: "incomplete", Answer: map[string]json.RawMessage{}, Evidence: map[string][]Evidence{},
+		Completion: []Completion{
+			{Step: "broad", Tool: "mark_lookup", URL: "/limited", Query: "outside fact", Failure: true},
+			{Step: "body", Tool: "mark_lookup", URL: "/limited", Query: "outside fact", Match: "body", Failure: true},
+		},
+	}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	trace := Trace{
+		Final: `{"answer":{},"citations":[],"abstain":true,"outcome":"incomplete"}`,
+		Calls: []ToolCall{
+			{Name: "fixture_mark_lookup", Input: map[string]any{"url": "/limited", "query": "outside fact", "match": "body"}, Error: "partial body scope"},
+			{Name: "fixture_mark_lookup", Input: map[string]any{"url": "/limited", "query": "outside fact", "match": "catalog"}, Error: "partial catalog scope"},
+		},
+	}
+	score, err := f.Score("overlap", &trace, "127.0.0.1:16319")
+	if err != nil || !score.Correct || !score.EvidenceSufficient {
+		t.Fatalf("complete matching rejected valid assignment: score=%+v err=%v", score, err)
+	}
+	rubric := f.Rubrics["overlap"]
+	rubric.Completion[0].Query = ""
+	f.Rubrics["overlap"] = rubric
+	if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "invalid completion key") {
+		t.Fatalf("empty match and query accepted: %v", err)
 	}
 }
 

@@ -194,31 +194,39 @@ func exactAnswer(got, want map[string]json.RawMessage) bool {
 }
 
 func completionObserved(expected []Completion, trace *Trace) bool {
-	if len(expected) == 0 {
+	if len(expected) == 0 || len(expected) > len(trace.Calls) {
 		return false
 	}
-	used := make([]bool, len(trace.Calls))
+	assigned := make([]int, len(trace.Calls))
+	for i := range assigned {
+		assigned[i] = -1
+	}
 	for i := range expected {
-		call, found := completionStepObserved(&expected[i], trace, used)
-		if !found {
+		seen := make([]bool, len(trace.Calls))
+		if !assignCompletion(i, expected, trace, assigned, seen) {
 			return false
 		}
-		used[call] = true
 	}
 	return true
 }
 
-func completionStepObserved(completion *Completion, trace *Trace, used []bool) (int, bool) {
+func assignCompletion(index int, expected []Completion, trace *Trace, assigned []int, seen []bool) bool {
 	for i := range trace.Calls {
-		if used[i] {
+		if seen[i] {
 			continue
 		}
 		call := &trace.Calls[i]
-		if completionCallMatches(completion, call) && completionResultMatches(completion, call) {
-			return i, true
+		completion := &expected[index]
+		if !completionCallMatches(completion, call) || !completionResultMatches(completion, call) {
+			continue
+		}
+		seen[i] = true
+		if assigned[i] == -1 || assignCompletion(assigned[i], expected, trace, assigned, seen) {
+			assigned[i] = index
+			return true
 		}
 	}
-	return 0, false
+	return false
 }
 
 func completionCallMatches(completion *Completion, call *ToolCall) bool {
