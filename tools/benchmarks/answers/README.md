@@ -8,6 +8,8 @@ Primary software-comparison baseline: [section-first on real soul](section-first
 The [original real-soul run](soul-baseline-2026-09-12.md) preserves the broad-body reader.
 Earlier [synthetic calibration](baseline-2026-09-12/README.md) remains a separate cohort.
 
+[Cached neighborhood pre-merge token evaluation](neighborhoods-2026-09-15/README.md) records paired synthetic results and frozen v4 controls.
+
 Runs a real model through production demarkus MCP tools and a local production
 server. Primary metric:
 

@@ -201,6 +201,26 @@ func BenchmarkGraphBaselineSave(b *testing.B) {
 	}
 }
 
+func BenchmarkGraphBaselineObserveLargeDocument(b *testing.B) {
+	for _, size := range []int{1024, 4 << 20} {
+		b.Run(fmt.Sprintf("bytes=%d", size), func(b *testing.B) {
+			const docURL = "mark://fixture.example/source.md"
+			const prefix = "# Source\n\n[target](/target.md)\n\n"
+			body := prefix + strings.Repeat("x", size-len(prefix))
+			result := graph.FetchResult{Status: "ok", Body: body, Metadata: map[string]string{"version": "1", "etag": "stable"}}
+			store := New()
+			store.ObserveDocument(docURL, result)
+			for b.Loop() {
+				store.ObserveDocument(docURL, result)
+			}
+			if store.EdgeCount() != 1 || store.GetNode(docURL).LinkCount != 1 || len(store.Backlinks("mark://fixture.example/target.md")) != 1 {
+				b.Fatal("large observation changed adjacency")
+			}
+			b.SetBytes(int64(size))
+		})
+	}
+}
+
 func assertBaselineNeighborhood(tb testing.TB, store *Store, total int) {
 	tb.Helper()
 	page, err := store.Neighborhood(baselineTarget, NeighborhoodOptions{

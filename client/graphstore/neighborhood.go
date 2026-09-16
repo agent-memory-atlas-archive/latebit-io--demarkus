@@ -211,7 +211,14 @@ func encodeNeighborhoodCursor(identity, after string) (string, error) {
 func (s *Store) neighborhoodRows(query neighborhoodQuery, position neighborhoodPosition) neighborhoodResult {
 	s.mu.RLock()
 	seenNeighbors := make(map[string]struct{})
-	pageURLs := make([]string, 0, query.pageSize+1)
+	edgeCount := 0
+	if query.direction != NeighborhoodOutgoing {
+		edgeCount += len(s.incoming[query.url])
+	}
+	if query.direction != NeighborhoodIncoming {
+		edgeCount += len(s.outgoing[query.url])
+	}
+	pageURLs := make([]string, 0, min(query.pageSize+1, edgeCount))
 	s.visitNeighborhoodEdgesLocked(query, func(edge *StoredEdge) {
 		neighbor := neighborhoodNeighbor(edge, query.url)
 		if _, seen := seenNeighbors[neighbor]; seen {

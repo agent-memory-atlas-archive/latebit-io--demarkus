@@ -1,9 +1,12 @@
 package graphstore
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,49 +185,85 @@ func TestRememberDocumentRepresentationRejectsUnacceptedContent(t *testing.T) {
 }
 
 func TestObserveDocumentMissingIdentityFallsBack(t *testing.T) {
-	t.Run("revision", func(t *testing.T) {
-		store := New()
-		docURL := "mark://world/source.md"
-		metadata := map[string]string{"etag": "stable"}
-		store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: "# Old\n\n[old](/old.md)", Metadata: metadata})
-		store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: "# New\n\n[new](/new.md)", Metadata: metadata})
-		if node := store.GetNode(docURL); node.Title != "New" {
-			t.Fatalf("revisionless observation did not use full merge: %+v", node)
-		}
-	})
-
-	t.Run("etag", func(t *testing.T) {
-		store := New()
-		docURL := "mark://world/source.md"
-		metadata := map[string]string{"version": "1"}
-		store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: "# Old\n\n[old](/old.md)", Metadata: metadata})
-		store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: "# New\n\n[new](/new.md)", Metadata: metadata})
-		if node := store.GetNode(docURL); node.Title != "Old" || node.Observation.Problem != "revision-conflict" {
-			t.Fatalf("etagless conflict semantics changed: %+v", node)
-		}
-	})
+	for _, field := range []string{"version", "etag"} {
+		t.Run(field, func(t *testing.T) {
+			store := New()
+			docURL := "mark://world/source.md"
+			body := "# Source\n\n[target](/target.md)"
+			metadata := map[string]string{"version": "1", "etag": "one", "rel-depends-on": "/dependency.md"}
+			store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: body, Metadata: metadata})
+			if _, cached := store.representations[docURL]; !cached {
+				t.Fatal("fixture did not prime representation cache")
+			}
+			edgeAddress := &store.edges[0]
+			incoming := maps.Clone(metadata)
+			delete(incoming, field)
+			store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: body, Metadata: incoming})
+			node := store.GetNode(docURL)
+			if node.Observation.Revision != 1 || node.Etag != "one" || node.Observation.Problem != "revision-conflict" || node.Observation.Freshness() != "stale" {
+				t.Fatalf("missing %s bypassed reconciliation: %+v", field, node)
+			}
+			if &store.edges[0] == edgeAddress || store.EdgeCount() != 2 {
+				t.Fatal("missing identity did not rebuild last-good topology")
+			}
+		})
+	}
 }
 
 func TestObserveDocumentChangedIdentityFallsBack(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		result      graph.FetchResult
-		wantTitle   string
-		wantProblem string
+		name         string
+		field        string
+		value        string
+		wantRevision int
+		wantProblem  string
 	}{
-		{name: "revision", result: graph.FetchResult{Status: "ok", Body: "# New\n\n[new](/new.md)", Metadata: map[string]string{"version": "2", "etag": "two"}}, wantTitle: "New"},
-		{name: "etag", result: graph.FetchResult{Status: "ok", Body: "# New\n\n[new](/new.md)", Metadata: map[string]string{"version": "1", "etag": "two"}}, wantTitle: "Old", wantProblem: "revision-conflict"},
-		{name: "source", result: graph.FetchResult{Source: "mark://other/source.md", Status: "ok", Body: "# New\n\n[new](/new.md)", Metadata: map[string]string{"version": "1", "etag": "one"}}, wantTitle: "Old", wantProblem: "revision-conflict"},
+		{name: "revision", field: "version", value: "2", wantRevision: 2},
+		{name: "etag", field: "etag", value: "two", wantRevision: 1, wantProblem: "revision-conflict"},
+		{name: "source", value: "mark://other/source.md", wantRevision: 1, wantProblem: "revision-conflict"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := New()
 			docURL := "mark://world/source.md"
-			store.ObserveDocument(docURL, graph.FetchResult{
-				Status: "ok", Body: "# Old\n\n[old](/old.md)", Metadata: map[string]string{"version": "1", "etag": "one"},
-			})
-			store.ObserveDocument(docURL, tc.result)
-			if node := store.GetNode(docURL); node.Title != tc.wantTitle || node.Observation.Problem != tc.wantProblem {
+			body := "# Source\n\n[target](/target.md)"
+			metadata := map[string]string{"version": "1", "etag": "one", "rel-depends-on": "/dependency.md"}
+			store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: body, Metadata: metadata})
+			if _, cached := store.representations[docURL]; !cached {
+				t.Fatal("fixture did not prime representation cache")
+			}
+			edgeAddress := &store.edges[0]
+			result := graph.FetchResult{Status: "ok", Body: body, Metadata: maps.Clone(metadata)}
+			if tc.field == "" {
+				result.Source = tc.value
+			} else {
+				result.Metadata[tc.field] = tc.value
+			}
+			store.ObserveDocument(docURL, result)
+			node := store.GetNode(docURL)
+			if node.Title != "Source" || node.LinkCount != 1 || node.Observation.Revision != tc.wantRevision || node.Etag != "one" || node.Observation.Source != docURL || node.Observation.Problem != tc.wantProblem {
 				t.Fatalf("changed identity result = %+v", node)
+			}
+			if &store.edges[0] == edgeAddress || store.EdgeCount() != 2 {
+				t.Fatal("changed identity bypassed topology reconciliation")
+			}
+		})
+	}
+}
+
+func TestDocumentRepresentationHashCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		metadata map[string]string
+		want     string
+	}{
+		{name: "empty", want: "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"},
+		{name: "binary", body: "a\x00é", metadata: map[string]string{"rel-z": "/last", "rel-a": "/first", "title": "ignored"}, want: "710d273107eafa547f7883a28dd5791ae6f9cb62567ddd39e00acf6172afcde1"},
+		{name: "chunked", body: strings.Repeat("é\x00", 2049), metadata: map[string]string{"rel-related": strings.Repeat("/target", 1025)}, want: "7c7fe65f5b7ba10af5574016478d75480dddead26e13a22de9784eccd65ea690"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fmt.Sprintf("%x", hashDocumentRepresentation(tc.body, tc.metadata)); got != tc.want {
+				t.Fatalf("representation hash = %s, want %s", got, tc.want)
 			}
 		})
 	}

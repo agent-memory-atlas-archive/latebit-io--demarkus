@@ -88,10 +88,13 @@ func (s *Store) refreshEqualDocument(incoming *graph.Node, representation [sha25
 }
 
 func (s *Store) rememberDocumentRepresentation(node *graph.Node, extracted graph.ExtractedEdges, representation [sha256.Size]byte) {
-	expected := sourceRecord{Node: StoredNode{
-		URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount,
-		Observation: node.Observation, Etag: node.Observation.Etag,
-	}}
+	expected := sourceRecord{
+		Node: StoredNode{
+			URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount,
+			Observation: node.Observation, Etag: node.Observation.Etag,
+		},
+		Edges: make([]StoredEdge, 0, len(extracted.Edges)),
+	}
 	for _, edge := range extracted.Edges {
 		expected.Edges = append(expected.Edges, StoredEdge{
 			From: edge.From, To: edge.To, Rel: edge.Rel, Label: edge.Label, Anchor: edge.Anchor, Count: max(edge.Count, 1),
@@ -122,17 +125,25 @@ func hashDocumentRepresentation(body string, metadata map[string]string) [sha256
 	}
 	slices.Sort(keys)
 
-	data := make([]byte, 0, len(body)+len(keys)*32)
-	data = binary.LittleEndian.AppendUint64(data, uint64(len(body)))
-	data = append(data, body...)
-	for _, key := range keys {
-		value := metadata[key]
-		data = binary.LittleEndian.AppendUint64(data, uint64(len(key)))
-		data = append(data, key...)
-		data = binary.LittleEndian.AppendUint64(data, uint64(len(value)))
-		data = append(data, value...)
+	digest := sha256.New()
+	var length [8]byte
+	var scratch [1024]byte
+	writeField := func(value string) {
+		binary.LittleEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = digest.Write(length[:]) // hash.Hash.Write cannot fail.
+		for value != "" {
+			n := copy(scratch[:], value)
+			_, _ = digest.Write(scratch[:n]) // hash.Hash.Write cannot fail.
+			value = value[n:]
+		}
 	}
-	return sha256.Sum256(data)
+	writeField(body)
+	for _, key := range keys {
+		writeField(key)
+		writeField(metadata[key])
+	}
+	var sum [sha256.Size]byte
+	return [sha256.Size]byte(digest.Sum(sum[:0]))
 }
 
 func sameDocumentRepresentation(current *StoredNode, incoming *graph.Node) bool {

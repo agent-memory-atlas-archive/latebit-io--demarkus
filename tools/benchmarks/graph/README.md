@@ -12,6 +12,8 @@ Fourth slice: [source freshness, 2026-09-13](source-freshness-2026-09-13.md).
 
 Fifth slice: [cached relation-aware neighborhoods, 2026-09-15](cached-neighborhoods-2026-09-15.md).
 
+Follow-up: [PR 462 review measurements against current main](pr462-review-2026-09-15.md).
+
 Run **before the first roadmap fix**, then after each slice, on the same machine:
 
 ```bash

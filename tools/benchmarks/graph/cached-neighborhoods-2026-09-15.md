@@ -62,4 +62,4 @@ The final implementation pages before copying evidence, bulk-builds adjacency in
 
 ## Paid cohort decision
 
-No paid v4 after-arm cohort ran. Immutable v4 uses `scoped-direct-read-v1`, which exposes only fetch, list, lookup, and versions. It excludes `mark_explore`, so the neighborhood feature cannot affect reader behavior. Running it would measure provider variance rather than this slice; changing the tool profile would invalidate comparison with the v4 baseline.
+The mechanical checkpoint initially deferred paid cohorts because immutable v4 `scoped-direct-read-v1` excludes `mark_explore`. The subsequent [pre-merge token evaluation](../answers/neighborhoods-2026-09-15/README.md) ran v4 as ordinary-retrieval controls and a paired synthetic cohort exposing graph tools. Tokens per supported correct answer increased in all three comparisons. Readers did not use graph navigation, so no neighborhood token benefit has been established and the token-efficiency gate remains unmet.
