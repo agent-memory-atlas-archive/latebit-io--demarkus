@@ -158,5 +158,27 @@ func replayNeighborhoodBinary(ctx context.Context, t *testing.T, binary, host, t
 		!strings.Contains(outputs[7], "/ops/restore.md") {
 		t.Fatal("replay did not exercise relations, pagination, and backlinks")
 	}
+	for page, wantPath := range []string{"/decisions/adr-009.md", "/decisions/adr-014.md"} {
+		_, relations, found := strings.Cut(outputs[5+page], "\n## Relations (")
+		if !found {
+			t.Fatalf("page %d has no relation section", page+1)
+		}
+		relations, _, _ = strings.Cut(relations, "\n## ")
+		var urls []string
+		for line := range strings.SplitSeq(relations, "\n") {
+			if !strings.HasPrefix(line, "- [") {
+				continue
+			}
+			_, target, found := strings.Cut(line, "](")
+			if !found || !strings.HasSuffix(target, ")") {
+				t.Fatalf("page %d has malformed relation row %q", page+1, line)
+			}
+			urls = append(urls, strings.TrimSuffix(target, ")"))
+		}
+		want := []string{"mark://" + host + wantPath}
+		if !slices.Equal(urls, want) {
+			t.Fatalf("page %d relation URLs = %v, want %v", page+1, urls, want)
+		}
+	}
 	return outputs
 }
