@@ -15,6 +15,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 PLUGIN_DEST="${OPENCODE_DIR}/plugins/demarkus-memory.ts"
 SKILL_DEST="${OPENCODE_DIR}/skills/remember"
+COMMAND_DEST="${OPENCODE_DIR}/commands"
 # Skill dirs from before the rename and from the interim "memory" name,
 # removed after a successful install.
 LEGACY_SKILL_DIRS=("${OPENCODE_DIR}/skills/soul-memory" "${OPENCODE_DIR}/skills/memory")
@@ -22,6 +23,11 @@ ASSETS_DEST="${HOME}/.demarkus/opencode-memory"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "${PLUGIN_DEST}"
+  for command in "${ASSETS_DEST}/commands/"*.md; do
+    [[ -f "${command}" ]] || continue
+    name="$(basename "${command}")"
+    [[ -f "${COMMAND_DEST}/${name}" ]] && cmp -s "${command}" "${COMMAND_DEST}/${name}" && rm -f "${COMMAND_DEST}/${name}"
+  done
   rm -rf "${SKILL_DEST}" "${ASSETS_DEST}" "${LEGACY_SKILL_DIRS[@]}"
   echo "[demarkus-memory] uninstalled (plugin, skill, assets). ~/.demarkus state and binaries untouched."
   exit 0
@@ -83,14 +89,14 @@ done
 
 # Commit: per-file renames are atomic; the asset tree swaps via a backup that
 # is restored if the new tree cannot be moved into place.
-mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
+mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}" "${COMMAND_DEST}"
 mv -f "${staging}/demarkus-memory.ts" "${PLUGIN_DEST}"
 mv -f "${staging}/SKILL.md" "${SKILL_DEST}/SKILL.md"
 prev="${ASSETS_DEST}.prev.$$"
 rm -rf "${prev}"
 [[ -e "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${prev}"
 if mv "${staging}/assets" "${ASSETS_DEST}"; then
-  rm -rf "${prev}" "${staging}" "${LEGACY_SKILL_DIRS[@]}"
+  rm -rf "${staging}" "${LEGACY_SKILL_DIRS[@]}"
   staging=""
 else
   if [[ ! -e "${prev}" ]]; then
@@ -102,6 +108,31 @@ else
   fi
   exit 1
 fi
+
+# V2 discovers Markdown commands directly. Replace only an unchanged copy of
+# the previous asset; a generated marker is not proof of ownership.
+for command in "${ASSETS_DEST}/commands/"*.md; do
+  name="$(basename "${command}")"
+  dest="${COMMAND_DEST}/${name}"
+  if [[ -e "${dest}" ]] && ! cmp -s "${dest}" "${prev}/commands/${name}" && ! cmp -s "${dest}" "${command}"; then
+    echo "[demarkus-memory] existing command preserved: ${dest}" >&2
+    continue
+  fi
+  install -m 0644 "${command}" "${dest}"
+done
+
+# Remove commands dropped by this update only when their installed copy still
+# matches the old asset. Edited copies remain the user's files.
+for command in "${prev}/commands/"*.md; do
+  [[ -f "${command}" ]] || continue
+  name="$(basename "${command}")"
+  [[ -e "${ASSETS_DEST}/commands/${name}" ]] && continue
+  dest="${COMMAND_DEST}/${name}"
+  if [[ -f "${dest}" ]] && cmp -s "${command}" "${dest}"; then
+    rm -f "${dest}"
+  fi
+done
+rm -rf "${prev}"
 
 echo "[demarkus-memory] installed:"
 echo "  plugin  ${PLUGIN_DEST}"

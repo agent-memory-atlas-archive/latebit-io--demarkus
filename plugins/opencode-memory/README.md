@@ -30,7 +30,7 @@ git clone https://github.com/latebit-io/demarkus
 demarkus/plugins/opencode-memory/install.sh
 ```
 
-This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the memory. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
+This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to `skills/remember/`, and the assets it reads to `~/.demarkus/opencode-memory/`. On OpenCode V2 it also installs the generated Markdown commands in `~/.config/opencode/commands/` without replacing user commands. V1 (1.18.29+) continues to use the plugin's legacy command registration. Start (or restart) OpenCode; the first session provisions the memory. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
 
 ### Update
 
@@ -59,14 +59,14 @@ On plugin init the adapter reads its version from the `package.json` that `insta
 | Claude Code hook | OpenCode |
 |---|---|
 | `SessionStart` provisioning | plugin init, fire-and-forget |
-| `SessionStart` guidance | `chat.message`, first message per session |
-| `UserPromptSubmit` recall-nudge | `chat.message`, on the prompt text |
-| `PreToolUse` publish/dest gate | `tool.execute.before` throwing to block |
-| gate `warn` (PostToolUse) | `tool.execute.after` appends reminder to tool output |
-| `PostToolUse` promote-nudge | `tool.execute.after`, on a fresh ADR publish |
-| `Stop` journal-nudge | `event` on `session.idle`, toast, once per session |
-| `.mcp.json` bundled MCP server | `config` hook sets `config.mcp` |
-| `commands/*.md` | `config` hook sets `config.command` |
+| `SessionStart` guidance | V2 model-only `session.context`; V1 `chat.message` |
+| `UserPromptSubmit` recall-nudge | V2 `session.prompt` observes text, then `session.context` injects privately; V1 `chat.message` |
+| `PreToolUse` publish/dest gate | V2 `tool.hook("execute.before")`; V1 `tool.execute.before` |
+| gate `warn` (PostToolUse) | V2 `tool.hook("execute.after")`; V1 `tool.execute.after` |
+| `PostToolUse` promote-nudge | V2/V1 after-hook on a fresh ADR publish |
+| `Stop` journal-nudge | V2 queues model-only context for the next request; V1 toast, once per session |
+| `.mcp.json` bundled MCP server | V2 `mcp.transform`; V1 `config.mcp` |
+| `commands/*.md` | V2 installed Markdown files; V1 `config.command` |
 | skill | native `SKILL.md` in `~/.config/opencode/skills/` |
 
 `ask` strictness maps to a block whose reason tells the agent to confirm with the user first (`tool.execute.before` has no native "ask").
