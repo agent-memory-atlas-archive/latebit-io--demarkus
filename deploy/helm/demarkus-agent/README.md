@@ -15,6 +15,53 @@ helm install agent ./deploy/helm/demarkus-agent \
 
 For private seeds (read-auth enabled), add a token entry for that host as well.
 
+### One-step install next to demarkus-knowledge-server
+
+The server chart's bootstrap Job mints a raw publish token per world into
+`<world>-token-values` (`tokens.emitRawValues`, on by default) under the key
+`tokens.admin.label` (default `admin`). Point the agent at those Secrets
+instead of copying tokens by hand:
+
+```yaml
+config:
+  seeds: [mark://team-a]
+  hubs: [mark://root]
+tokens:
+  fromWorldSecrets:
+    - hostPort: "team-a:6309"
+      secret: team-a-token-values
+    - hostPort: "root:6309"
+      secret: root-token-values
+```
+
+Both charts can go in one `helm install` or one umbrella chart. The world
+Secret sources are not `optional`, so the agent container does not start until
+every named Secret exists (the pod sits in `ContainerCreating` with a
+"secret not found" event), then comes up with the tokens in place. Same
+namespace only. Needs an agent image that reads `tokens.d`; older images ignore
+the directory and publish unauthenticated.
+
+The Job only creates Secrets that are missing. A world whose `tokens.toml`
+Secret already existed (bootstrapped before `emitRawValues`, or provisioned
+another way) gets no `<world>-token-values`, and the agent never starts. Mint an
+agent entry into that world's `tokens.toml` Secret and store its raw value
+yourself; the server hot-reloads the file. Run under Bash:
+
+```bash
+set -euo pipefail
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+kubectl get secret team-a-tokens -o jsonpath='{.data.tokens\.toml}' | base64 -d > "$work/tokens.toml"
+demarkus-token generate -label agent -tokens "$work/tokens.toml" > "$work/raw.txt"
+kubectl create secret generic team-a-tokens --from-file=tokens.toml="$work/tokens.toml" --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic team-a-token-values --from-file=agent="$work/raw.txt"
+```
+
+Then set `key: agent` on that world's `fromWorldSecrets` entry. `team-a-tokens`
+is the world's `tokenSecret.name` in the server chart values. The broker also
+appends to that Secret, so re-apply promptly after reading it.
+
 ## Values
 
 | Key | Type | Default | Description |
@@ -37,6 +84,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `insecure` | bool | `false` | Skip TLS cert verification (self-signed dev clusters only) |
 | `tokens.existingSecret` | string | `""` | Name of an existing Secret with key `tokens.toml`. Takes precedence over `tokens.inline` |
 | `tokens.inline` | map | `{}` | Inline `host:port → token` map. Generates `<release>-tokens` Secret |
+| `tokens.fromWorldSecrets` | list | `[]` | `{hostPort, secret, key?}` entries projecting a raw token Secret key to `~/.mark/tokens.d/<hostPort>`. Not optional: pod waits for the Secret. `key` defaults to `admin` |
 | `state.persistent` | bool | `false` | If true, mount a PVC for the crawl-politeness state file |
 | `state.storageClassName` | string | `""` | StorageClass for the state PVC |
 | `state.size` | string | `1Gi` | PVC size |
@@ -71,7 +119,9 @@ Token files must therefore use logical authority keys.
 
 ## How auth is wired
 
-The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml`. The chart mounts the tokens Secret at `/home/demarkus/.mark/tokens.toml` and sets `HOME=/home/demarkus`, so the existing code path Just Works.
+The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml` and every file under `~/.mark/tokens.d/` (file name = `host:port`, content = raw token; `tokens.toml` wins on conflict). The chart mounts one projected volume at `/home/demarkus/.mark` holding the `tokens.toml` Secret plus one `tokens.d/<hostPort>` file per `tokens.fromWorldSecrets` entry, and sets `HOME=/home/demarkus`.
+
+Tokens are read once at startup. A rotated Secret takes effect on the next pod restart.
 
 For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var by patching the Deployment container `env`: but the file path is preferred for multi-host setups.
 

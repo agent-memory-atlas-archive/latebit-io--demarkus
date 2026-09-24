@@ -297,3 +297,135 @@ func TestSaveNeverExposesEmptyFile(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadDefaultReadsTokensDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".mark", "tokens.d")
+	// Mimic a kubelet projected volume: ..data holds the files, names are symlinks.
+	data := filepath.Join(dir, "..2026_09_24")
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "team-a:6309"), []byte("raw-a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "empty:6309"), []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..2026_09_24", filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"team-a:6309", "empty:6309"} {
+		if err := os.Symlink(filepath.Join("..data", name), filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, ".mark", "tokens.toml"), []byte("[\"team-b:6309\"]\ntoken = \"toml-b\"\n[\"team-a:6309\"]\ntoken = \"toml-a\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged []string
+	warnf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { warnf = log.Printf })
+
+	s := LoadDefault()
+	if got := s.Get("team-a:6309"); got != "toml-a" {
+		t.Errorf("tokens.toml should win: got %q", got)
+	}
+	if got := s.Get("team-b:6309"); got != "toml-b" {
+		t.Errorf("team-b: got %q", got)
+	}
+	if got := s.Get("empty:6309"); got != "" {
+		t.Errorf("empty file should not register: got %q", got)
+	}
+	if got := s.Hosts(); strings.Join(got, ",") != "team-a:6309,team-b:6309" {
+		t.Errorf("Hosts: got %v", got)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "empty token") {
+		t.Errorf("expected one empty-token warning, got %v", logged)
+	}
+
+	// Remove the toml override: the tokens.d value surfaces and Set never persists it.
+	if err := os.Remove(filepath.Join(home, ".mark", "tokens.toml")); err != nil {
+		t.Fatal(err)
+	}
+	s = LoadDefault()
+	if got := s.Get("team-a:6309"); got != "raw-a" {
+		t.Errorf("tokens.d fallback: got %q", got)
+	}
+	if err := s.Set("team-c:6309", "c"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(home, ".mark", "tokens.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "raw-a") {
+		t.Errorf("tokens.d entry leaked into tokens.toml: %s", saved)
+	}
+}
+
+func TestLoadReadsSiblingTokensDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.toml")
+	if err := os.MkdirAll(DirPath(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(DirPath(path), "team-a:6309"), []byte("raw-a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No tokens.toml at all: `demarkus token list` must still see tokens.d hosts.
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Hosts(); len(got) != 1 || got[0] != "team-a:6309" {
+		t.Errorf("Hosts: got %v", got)
+	}
+	if got := s.Get("team-a:6309"); got != "raw-a" {
+		t.Errorf("Get: got %q", got)
+	}
+}
+
+func TestLoadDefaultKeepsDirWhenFileBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".mark", "tokens.d")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "team-a:6309"), []byte("raw-a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".mark", "tokens.toml"), []byte("not [valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warnf = func(string, ...any) {}
+	t.Cleanup(func() { warnf = log.Printf })
+
+	if got := LoadDefault().Get("team-a:6309"); got != "raw-a" {
+		t.Errorf("broken tokens.toml dropped tokens.d entry: got %q", got)
+	}
+}
+
+func TestDirPathEmpty(t *testing.T) {
+	if got := DirPath(""); got != "" {
+		t.Errorf("DirPath(\"\") = %q, want empty", got)
+	}
+	if got := loadDir(""); len(got) != 0 {
+		t.Errorf("loadDir(\"\") = %v, want empty", got)
+	}
+}
+
+func TestLoadDirMissingIsSilent(t *testing.T) {
+	var logged []string
+	warnf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { warnf = log.Printf })
+	if got := loadDir(filepath.Join(t.TempDir(), "nope")); len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+	if len(logged) != 0 {
+		t.Errorf("missing dir must not warn: %v", logged)
+	}
+}
