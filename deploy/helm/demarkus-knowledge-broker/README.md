@@ -304,19 +304,12 @@ listener silently:
 ## Quick install (development)
 
 Put sensitive values in a values file rather than on the command line;
-`--set` values leak into shell history and `ps` output. The values
-file also keeps the multi-line broker signing PEM readable:
+`--set` values leak into shell history and `ps` output.
 
 ```yaml
 # broker-secrets.values.yaml: do not commit
 oidc:
   clientSecret: "YOUR_CLIENT_SECRET"
-  # ECDSA P-256 key for broker-signed id_tokens. Generate with:
-  #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out broker-key.pem
-  brokerSigningKey: |
-    -----BEGIN PRIVATE KEY-----
-    YOUR_PEM_LINES_HERE
-    -----END PRIVATE KEY-----
 ```
 
 ```bash
@@ -330,10 +323,48 @@ helm install broker deploy/helm/demarkus-knowledge-broker \
   --set ingress.enabled=true \
   --set ingress.host=broker.example.com \
   --set ingress.tls.certManager.enabled=true \
-  --set-json 'worlds=[{"name":"team-a","namespace":"team-a","tokensSecret":"team-a-tokens","allow":{"domains":["example.com"]},"defaultToken":{"paths":["/team-a/*"],"operations":["read","publish"],"expiresAfter":"24h"}}]'
+  --set worldDefaults.namespace=demarkus-knowledge \
+  --set worldDefaults.authorityDomain=knowledge.demarkus-knowledge.svc.cluster.local \
+  --set worldDefaults.dialAddress=knowledge.demarkus-knowledge.svc.cluster.local:6309 \
+  --set 'worlds[0].name=team-a'
 ```
 
 World namespaces must already exist; the chart does not create them.
+
+## Worlds and world defaults
+
+A world needs only a `name`. `worldDefaults` supplies the rest:
+`namespace` (else the release namespace), `tokensSecret` (`<name>-tokens`),
+`internalAddress` (`<name>.<authorityDomain>:6309`, the logical authority
+and TLS SNI), `dialAddress` (the socket to open, for one shared listener
+serving many authorities), `allow` and `defaultToken`, merged key by key. A
+field set on a world wins. `dialAddress` replaces the ExternalName alias
+Services a shared knowledge server otherwise needed for SNI.
+
+Under the `demarkus-knowledge-system` umbrella the list comes from
+`global.worlds`, and `global.knowledgeService` and `global.authorityDomain`
+set the defaults.
+
+## Signing key
+
+Broker-signed id_tokens use an ECDSA P-256 key served at
+`/.well-known/jwks.json`. With `oidc.brokerSigningKey` and
+`oidc.existingSigningKeyRef` both blank (the default) the broker generates
+one on first start and stores it in the `server.signingKeySecret` Secret
+(`<fullname>-signing-key`); the write is create-only, so every replica and
+restart shares it. Rotate by deleting the Secret and running
+`kubectl rollout restart deployment/<fullname>`: every replica loads the key
+once at startup, so restarting only some would serve two JWKS. Supply
+your own through `existingSigningKeyRef` when key custody lives elsewhere.
+
+## Web clients
+
+Each `webClients[]` entry sets exactly one of `clientSecret` (cleartext,
+hashed by the broker at load), `clientSecretHash` (sha256 hex) or
+`existingSecretRef` (mounted under the env var the rendered
+`clientSecretEnv` names). Point the
+library chart's `existingSecretRef` at the same Secret so one sealed secret
+serves both sides.
 
 ## Production checklist
 
@@ -417,7 +448,7 @@ The default NetworkPolicy relies on the automatic
 Older clusters must label the ingress-controller and `kube-system`
 namespaces explicitly. OIDC and Kubernetes API egress is limited to
 TCP 443. Mark Protocol egress includes UDP 6309 and custom ports parsed
-from `worlds[].internalAddress`. Deployments using other OIDC or API ports must disable
+from `worlds[].internalAddress` or `dialAddress`. Deployments using other OIDC or API ports must disable
 `networkPolicy.enabled` and supply an equivalent custom policy.
 
 ### 5. Confirm the install-time RBAC works for your cluster
@@ -473,6 +504,20 @@ preserved across `helm upgrade` via a `lookup` of the live config
 Secret. To rotate the key, set `server.cookieKey` to a new
 base64-encoded value and restart the broker. Any in-flight OIDC login
 is invalidated by rotation, which is the intended behavior.
+
+## Resource names
+
+Resources are named after the release (`fullnameOverride` still wins). A
+release whose name did not contain the chart name and set no override is
+renamed on upgrade. The kept Secrets change name with it:
+
+- refresh tokens: every session must log in again;
+- dynamic clients: RFC 7591 registrations are lost and connected MCP hosts
+  must register again;
+- signing key: the broker generates a new key, invalidating broker-signed
+  id_tokens in flight.
+
+Set `fullnameOverride` to the old fullname before upgrading to keep all three.
 
 ## Values
 

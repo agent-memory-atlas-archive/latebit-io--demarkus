@@ -12,10 +12,19 @@ metadata:
 spec:
   secretName: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
   issuerRef:
+    {{- if .Values.tls.certManager.selfSigned.create }}
+    kind: Issuer
+    name: {{ include "demarkus-knowledge-server.selfSignedIssuerName" . }}
+  {{- /* A self-signed cert's issuer DN is its subject; empty violates RFC 5280. */}}
+  subject:
+    organizations:
+      - demarkus
+    {{- else }}
     kind: {{ .Values.tls.certManager.issuerRef.kind }}
     name: {{ .Values.tls.certManager.issuerRef.name }}
+    {{- end }}
   dnsNames:
-    {{- range .Values.worlds }}
+    {{- range include "demarkus-knowledge-server.worlds" . | fromYamlArray }}
     {{- range .authorities }}
     - {{ lower . | quote }}
     {{- end }}

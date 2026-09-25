@@ -5,9 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only by default; each release job grants itself the write scopes it
+# uses (tags, releases, images, charts).
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   detect-changes:
@@ -17,9 +18,10 @@ jobs:
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
       tools: ${{ steps.filter.outputs.tools }}
+      knowledge_system: ${{ steps.filter.outputs.knowledge_system }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           filters: |
@@ -41,14 +43,19 @@ jobs:
               - 'protocol/**'
               - 'client/**'
               - 'deploy/helm/demarkus-knowledge-broker/**'
+            knowledge_system:
+              - 'deploy/helm/demarkus-knowledge-system/**'
+              - 'deploy/helm/demarkus-knowledge-server/**'
+              - 'deploy/helm/demarkus-knowledge-broker/**'
+              - 'deploy/helm/demarkus-agent/**'
 
   test-protocol:
     needs: detect-changes
     if: needs.detect-changes.outputs.protocol == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
       - run: cd protocol && go test -race ./...
@@ -59,8 +66,8 @@ jobs:
     if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
       - run: cd server && go test -race ./...
@@ -73,8 +80,8 @@ jobs:
     if: needs.detect-changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
       - run: cd client && go test -race ./...
@@ -86,8 +93,8 @@ jobs:
     if: needs.detect-changes.outputs.tools == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
       - run: cd tools && go test -race ./...
@@ -105,10 +112,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "protocol/v"
@@ -136,10 +143,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "server/v"
@@ -171,10 +178,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "client/v"
@@ -204,10 +211,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "tools/v"
@@ -240,10 +247,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "broker/v"
@@ -265,6 +272,43 @@ jobs:
           fi
           echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
+  # The umbrella chart releases on its own stream (knowledge-system/v). It
+  # vendors the three local charts, so any of their changes bumps it too;
+  # the release job re-versions them to their latest tags before packaging.
+  semver-knowledge-system:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.knowledge_system == 'true'
+    runs-on: ubuntu-latest
+    # Reads tags only.
+    permissions:
+      contents: read
+    outputs:
+      new_version: ${{ steps.semver.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
+        id: semver
+        with:
+          tag_prefix: "knowledge-system/v"
+          major_pattern: "BREAKING CHANGE:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
+          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/ deploy/helm/demarkus-knowledge-broker/ deploy/helm/demarkus-agent/"
+          bump_each_commit: false
+          search_commit_body: true
+      - name: Check if version changed
+        id: check
+        run: |
+          TAG="knowledge-system/v${{ steps.semver.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
+
   # Memory broker releases on its own stream (memory-broker/v), mirroring
   # the knowledge broker's split: the two binaries share tools/internal/
   # but ship, image, and chart independently.
@@ -276,10 +320,10 @@ jobs:
       new_version: ${{ steps.semver.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: PaulHatch/semantic-version@v5.3.0
+      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
           tag_prefix: "memory-broker/v"
@@ -305,12 +349,15 @@ jobs:
     needs: semver-protocol
     if: needs.semver-protocol.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Create tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'protocol/v${{ needs.semver-protocol.outputs.new_version }}';
@@ -322,7 +369,7 @@ jobs:
             });
             console.log(`Created tag: ${tag}`);
       - name: Create GitHub Release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'protocol/v${{ needs.semver-protocol.outputs.new_version }}';
@@ -338,17 +385,20 @@ jobs:
     needs: semver-server
     if: needs.semver-server.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
 
       - name: Create module tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'server/v${{ needs.semver-server.outputs.new_version }}';
@@ -363,16 +413,16 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
           version: latest
@@ -415,7 +465,7 @@ jobs:
       # build under QEMU completes in seconds because no Go compile runs
       # under emulation.
       - name: Build + push demarkus-server image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: server/Dockerfile
@@ -426,7 +476,7 @@ jobs:
             ghcr.io/latebit-io/demarkus-server:latest
 
       - name: Build + push demarkus-knowledge-server image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: server/Dockerfile.knowledge
@@ -440,7 +490,7 @@ jobs:
       # version so `helm install ghcr.io/.../charts/demarkus-server --version
       # X` resolves the image at the same tag. Helm 3.13+ reads ~/.docker/
       # config.json for OCI auth, which docker/login-action already wrote.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.13.2
 
@@ -458,17 +508,20 @@ jobs:
     needs: semver-client
     if: needs.semver-client.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
 
       - name: Create module tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'client/v${{ needs.semver-client.outputs.new_version }}';
@@ -483,16 +536,16 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
           version: latest
@@ -518,7 +571,7 @@ jobs:
       # demarkus-agent lives in client/cmd/ so it rides the client release
       # cadence. Dockerfile is COPY-only over the staged binaries above.
       - name: Build + push demarkus-agent image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: client/cmd/demarkus-agent/Dockerfile
@@ -531,7 +584,7 @@ jobs:
       # Chart version + appVersion pinned 1:1 to the client module version
       # so the agent chart and the agent image released in the same module
       # bump always reference each other.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.13.2
 
@@ -545,17 +598,20 @@ jobs:
     needs: semver-tools
     if: needs.semver-tools.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
 
       - name: Create module tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'tools/v${{ needs.semver-tools.outputs.new_version }}';
@@ -572,7 +628,7 @@ jobs:
 
       # Admin CLIs and plugin binaries only; the broker ships on its own
       # stream via release-broker below.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
           version: latest
@@ -586,17 +642,20 @@ jobs:
     needs: semver-broker
     if: needs.semver-broker.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
 
       - name: Create module tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'broker/v${{ needs.semver-broker.outputs.new_version }}';
@@ -611,16 +670,16 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
           version: latest
@@ -646,7 +705,7 @@ jobs:
       # standalone binary archives on the tools stream and are not bundled
       # into any image — see §6.7.A decisions on minimal pod blast radius.
       - name: Build + push demarkus-knowledge-broker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: tools/demarkus-knowledge-broker/Dockerfile
@@ -659,7 +718,7 @@ jobs:
       # Chart version + appVersion pinned 1:1 to the broker stream version so
       # the broker chart and the broker image released in the same bump
       # always reference each other.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.13.2
 
@@ -673,17 +732,20 @@ jobs:
     needs: semver-memory-broker
     if: needs.semver-memory-broker.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
 
       - name: Create module tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const tag = 'memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}';
@@ -698,16 +760,16 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
           version: latest
@@ -730,7 +792,7 @@ jobs:
           cp dist/demarkus-memory-broker_linux_arm_7*/demarkus-memory-broker dist/docker/armv7/
 
       - name: Build + push demarkus-memory-broker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: tools/demarkus-memory-broker/Dockerfile
@@ -743,7 +805,7 @@ jobs:
       # Chart version + appVersion pinned 1:1 to the memory-broker stream
       # version so the chart and image released in the same bump always
       # reference each other.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.13.2
 
@@ -752,6 +814,83 @@ jobs:
           VER="${{ needs.semver-memory-broker.outputs.new_version }}"
           helm package deploy/helm/demarkus-memory-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
           helm push "/tmp/charts/demarkus-memory-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
+  # Runs after the sub-chart releases so the vendored charts and their image
+  # tags point at releases that exist. Skipped sub-chart releases are fine;
+  # a failed one blocks the umbrella.
+  release-knowledge-system:
+    needs: [semver-knowledge-system, release-server, release-client, release-broker]
+    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-server.result != 'failure' && needs.release-client.result != 'failure' && needs.release-broker.result != 'failure' }}
+    runs-on: ubuntu-latest
+    # Tag creation needs contents; the chart push and the library pull need packages.
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.13.2
+
+      - name: Re-version vendored charts to their latest release tags
+        # Each sub-chart publishes with --version/--app-version from its own
+        # tag stream; the committed Chart.yaml values are only local-render
+        # placeholders. Mirror the published numbers so the vendored copies
+        # default to the same image tags. A component job tags before it
+        # pushes, so a tag alone does not prove a release: require the
+        # component chart (pushed last, after its image) to exist on ghcr.
+        run: |
+          set -euo pipefail
+          latest() { git tag --list "$1/v*" --sort=-v:refname | head -n1 | sed "s#^$1/v##"; }
+          for pair in server:demarkus-knowledge-server client:demarkus-agent broker:demarkus-knowledge-broker; do
+            stream="${pair%%:*}"
+            chart="${pair##*:}"
+            ver="$(latest "$stream")"
+            if [ -z "$ver" ]; then
+              echo "no $stream/v* tag found" >&2
+              exit 1
+            fi
+            if ! helm show chart "oci://ghcr.io/latebit-io/charts/$chart" --version "$ver" >/dev/null; then
+              echo "::error::$stream/v$ver is tagged but $chart $ver is not on ghcr; that release did not finish" >&2
+              exit 1
+            fi
+            yq -i ".version = \"$ver\" | .appVersion = \"$ver\"" "deploy/helm/$chart/Chart.yaml"
+            echo "$chart -> $ver"
+          done
+
+      - name: Package + push demarkus-knowledge-system chart
+        run: |
+          VER="${{ needs.semver-knowledge-system.outputs.new_version }}"
+          helm dependency update deploy/helm/demarkus-knowledge-system
+          helm package deploy/helm/demarkus-knowledge-system --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-knowledge-system-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
+      # Tag last: an existing tag makes semver skip the version, so tagging
+      # before a failed push would never publish it.
+      - name: Create chart tag
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const tag = 'knowledge-system/v${{ needs.semver-knowledge-system.outputs.new_version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tag}`,
+              sha: context.sha
+            });
+            console.log(`Created tag: ${tag}`);
 
   # Dispatch the pin-bump workflow after any binary release. The bump
   # workflow's own release trigger never fires: GoReleaser publishes with
