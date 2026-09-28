@@ -109,6 +109,67 @@ func TestRuntimeReloadKeepsLastValidTokens(t *testing.T) {
 	}
 }
 
+func TestRuntimeOpensWithoutTokensFileAndWatchesForIt(t *testing.T) {
+	dir := t.TempDir()
+	tokensFile := dir + "/tokens.toml"
+	staticFile := dir + "/static-tokens.toml"
+	writeFile(t, staticFile, tokenConfig("static"))
+	runtime := newTestRuntime(t, &Config{TokensFile: tokensFile, StaticTokensFile: staticFile, OptionalTokensFiles: true})
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	publish := func(token string) string {
+		return serveStatus(t, runtime, "PUBLISH /"+token+".md\n---\nauth: "+token+"\n---\n# Doc\n")
+	}
+	if status := publish("static"); status != protocol.StatusCreated {
+		t.Fatalf("static token publish status = %q, want %q", status, protocol.StatusCreated)
+	}
+	if status := publish("runtime"); status != protocol.StatusUnauthorized {
+		t.Fatalf("publish before the tokens file exists = %q, want %q", status, protocol.StatusUnauthorized)
+	}
+
+	// The watcher sees the file land in the directory it already watches.
+	writeFile(t, tokensFile, tokenConfig("runtime"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if status := publish("runtime"); status == protocol.StatusCreated {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("tokens file created after the open was never loaded")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestRuntimeRejectsStaticTokensFileOutsideTokensDirectory(t *testing.T) {
+	tokensFile := t.TempDir() + "/tokens.toml"
+	staticFile := t.TempDir() + "/static-tokens.toml"
+	writeFile(t, tokensFile, tokenConfig("runtime"))
+	writeFile(t, staticFile, tokenConfig("static"))
+	_, err := New(&Config{
+		Store:            filestore.New(mustOpenStore(t), catalog.New()),
+		TokensFile:       tokensFile,
+		StaticTokensFile: staticFile,
+		Logger:           slog.New(slog.DiscardHandler),
+	})
+	if err == nil || !strings.Contains(err.Error(), "must share the directory") {
+		t.Fatalf("New: got %v, want directory mismatch error", err)
+	}
+}
+
+func mustOpenStore(t *testing.T) *protocolstore.Store {
+	t.Helper()
+	documents, err := protocolstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	return documents
+}
+
 func TestRuntimesIsolateTokensAndDocuments(t *testing.T) {
 	firstTokens := t.TempDir() + "/tokens.toml"
 	secondTokens := t.TempDir() + "/tokens.toml"

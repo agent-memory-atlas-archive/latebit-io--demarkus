@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -23,17 +24,22 @@ const maxRateWaitBudget = 10 * time.Second
 
 // Config defines one runtime and transfers backend ownership on success.
 type Config struct {
-	Name              string
-	Store             backend.Store
-	CloseBackend      func() error
-	TokensFile        string
-	DisableTokenWatch bool
-	ReadOnly          bool
-	RequestTimeout    time.Duration
-	MaxConcurrent     int
-	RateLimit         float64
-	RateBurst         int
-	Logger            *slog.Logger
+	Name         string
+	Store        backend.Store
+	CloseBackend func() error
+	TokensFile   string
+	// StaticTokensFile holds operator-owned entries merged with TokensFile.
+	StaticTokensFile string
+	// OptionalTokensFiles opens the world when a tokens file is missing and
+	// reloads it once it appears; see auth.SourceConfig.Optional.
+	OptionalTokensFiles bool
+	DisableTokenWatch   bool
+	ReadOnly            bool
+	RequestTimeout      time.Duration
+	MaxConcurrent       int
+	RateLimit           float64
+	RateBurst           int
+	Logger              *slog.Logger
 }
 
 // Runtime serves one world's streams with isolated auth and rate state.
@@ -47,7 +53,7 @@ type Runtime struct {
 	closeBackend   func() error
 
 	watchCancel context.CancelFunc
-	watchDone   chan struct{}
+	watchDone   sync.WaitGroup
 
 	mu      sync.Mutex
 	closing bool
@@ -78,7 +84,18 @@ func New(config *Config) (*Runtime, error) {
 	if config.Name != "" {
 		logger = logger.With("world", config.Name)
 	}
-	tokens, err := auth.OpenSource(config.TokensFile)
+	// Every caller watches by directory, so a split pair would silently
+	// stop reloading after the watcher exits.
+	if config.StaticTokensFile != "" && filepath.Dir(config.StaticTokensFile) != filepath.Dir(config.TokensFile) {
+		return nil, fmt.Errorf("world runtime: static tokens file %q must share the directory of %q", config.StaticTokensFile, config.TokensFile)
+	}
+	sourceConfig := auth.SourceConfig{
+		TokensFile:       config.TokensFile,
+		StaticTokensFile: config.StaticTokensFile,
+		Optional:         config.OptionalTokensFiles,
+		Logger:           logger,
+	}
+	tokens, err := auth.OpenSource(sourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("world runtime: load tokens: %w", err)
 	}
@@ -87,7 +104,6 @@ func New(config *Config) (*Runtime, error) {
 		requestTimeout: config.RequestTimeout,
 		logger:         logger,
 		closeBackend:   config.CloseBackend,
-		watchDone:      make(chan struct{}),
 	}
 	runtime.handler, err = handler.New(handler.Config{
 		Store:         config.Store,
@@ -104,23 +120,22 @@ func New(config *Config) (*Runtime, error) {
 	if config.MaxConcurrent > 0 {
 		runtime.concurrent = make(chan struct{}, config.MaxConcurrent)
 	}
-	if config.TokensFile == "" || config.DisableTokenWatch {
-		close(runtime.watchDone)
+	files := sourceConfig.Files()
+	if config.DisableTokenWatch || len(files) == 0 {
 		return runtime, nil
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
 	runtime.watchCancel = cancel
 	watcher := &configwatch.Watcher{
-		Target: config.TokensFile,
-		Reload: tokens.Reload,
-		Logger: logger,
+		Targets: files,
+		Reload:  tokens.Reload,
+		Logger:  logger,
 	}
-	go func() {
-		defer close(runtime.watchDone)
+	runtime.watchDone.Go(func() {
 		if err := watcher.Run(watchCtx); err != nil {
 			logger.Warn("auth: token file watcher exited", "error", err)
 		}
-	}()
+	})
 	return runtime, nil
 }
 
@@ -257,7 +272,7 @@ func (r *Runtime) Close() error {
 		if r.watchCancel != nil {
 			r.watchCancel()
 		}
-		<-r.watchDone
+		r.watchDone.Wait()
 		r.active.Wait()
 		if r.limiter != nil {
 			r.limiter.Stop()

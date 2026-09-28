@@ -83,8 +83,8 @@ func TestRunValidatesInputs(t *testing.T) {
 		want string
 	}{
 		{"empty target", Watcher{Reload: func() error { return nil }, Logger: discardLogger()}, "target is empty"},
-		{"nil reload", Watcher{Target: "/tmp/x", Logger: discardLogger()}, "reload callback is nil"},
-		{"nil logger", Watcher{Target: "/tmp/x", Reload: func() error { return nil }}, "logger is nil"},
+		{"nil reload", Watcher{Targets: []string{"/tmp/x"}, Logger: discardLogger()}, "reload callback is nil"},
+		{"nil logger", Watcher{Targets: []string{"/tmp/x"}, Reload: func() error { return nil }}, "logger is nil"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,6 +93,22 @@ func TestRunValidatesInputs(t *testing.T) {
 				t.Fatalf("Run() error = %v, want substring %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestReloadsOnceAfterWatchEstablished(t *testing.T) {
+	dir := t.TempDir()
+	var calls atomic.Int32
+	w := Watcher{
+		Targets:  []string{filepath.Join(dir, "tokens.toml")},
+		Reload:   func() error { calls.Add(1); return nil },
+		Debounce: 20 * time.Millisecond,
+		Logger:   discardLogger(),
+	}
+	runInBackground(t, &w)
+	// No file event at all: the startup tick alone must reload.
+	if got := waitForCount(&calls, 1, 2*time.Second); got < 1 {
+		t.Fatalf("expected the startup reload, got %d calls", got)
 	}
 }
 
@@ -105,7 +121,7 @@ func TestInPlaceWriteTriggersReload(t *testing.T) {
 
 	var calls atomic.Int32
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { calls.Add(1); return nil },
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
@@ -131,7 +147,7 @@ func TestAtomicRenameTriggersReload(t *testing.T) {
 
 	var calls atomic.Int32
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { calls.Add(1); return nil },
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
@@ -192,7 +208,7 @@ func TestSymlinkRetargetTriggersReload(t *testing.T) {
 
 	var calls atomic.Int32
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { calls.Add(1); return nil },
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
@@ -224,7 +240,7 @@ func TestDebounceCoalescesBurst(t *testing.T) {
 
 	var calls atomic.Int32
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { calls.Add(1); return nil },
 		Debounce: 400 * time.Millisecond,
 		Logger:   discardLogger(),
@@ -273,7 +289,7 @@ func TestSiblingWritesDoNotTriggerReload(t *testing.T) {
 
 	var calls atomic.Int32
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { calls.Add(1); return nil },
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
@@ -303,7 +319,7 @@ func TestCtxCancelReturnsCleanly(t *testing.T) {
 	}
 
 	w := Watcher{
-		Target:   target,
+		Targets:  []string{target},
 		Reload:   func() error { return nil },
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
