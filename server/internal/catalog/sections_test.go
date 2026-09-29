@@ -2,15 +2,17 @@ package catalog
 
 import (
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
-// hasWord resolves a word through the vocabulary and checks the set.
-func hasWord(set []term, word string) bool {
-	id, ok := lookupTerm(word)
-	return ok && hasTerm(set, id)
+// hasWord resolves a word through the document's vocabulary and checks the set.
+func hasWord(doc *DocSections, set []termID, word string) bool {
+	return hasTerm(set, doc.vocab.id(word))
 }
 
 func collectTokens(field string) []string {
@@ -78,10 +80,10 @@ func TestIndexSections(t *testing.T) {
 	if s[1].anchor != "setext-title" || s[1].text != "under setext" {
 		t.Errorf("setext section = anchor %q text %q, want underline dropped", s[1].anchor, s[1].text)
 	}
-	if !hasWord(s[3].trail, "child") || !hasWord(s[3].trail, "setext") || !hasWord(s[3].trail, "grandchild") {
+	if !hasWord(doc, s[3].trail, "child") || !hasWord(doc, s[3].trail, "setext") || !hasWord(doc, s[3].trail, "grandchild") {
 		t.Errorf("grandchild trail lacks ancestors: %v", s[3].trail)
 	}
-	if hasWord(s[3].tokens, "child") || !hasWord(s[3].tokens, "deep") {
+	if hasWord(doc, s[3].tokens, "child") || !hasWord(doc, s[3].tokens, "deep") {
 		t.Errorf("grandchild tokens should be its own text only")
 	}
 	if s[4].text != "" || s[4].heading != "Sibling" {
@@ -133,4 +135,43 @@ func TestBodyLookupDocTermsAndArchive(t *testing.T) {
 	if c.Sections("/a.md") != nil || len(mustLookup(t, c, "gate", Options{Match: MatchBody})) != 0 {
 		t.Error("Remove left the section index behind")
 	}
+}
+
+// Republishing one path must keep only the live index, however many unseen
+// tokens each version brings.
+func TestRepublishKeepsIndexBounded(t *testing.T) {
+	c := New()
+	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	c.Put("/graph.md", nil, memtest.AgentGraphBody(0), modified)
+	const cycles = 60
+	growth := memtest.Retained(func() {
+		for cycle := 1; cycle <= cycles; cycle++ {
+			c.Put("/graph.md", nil, memtest.AgentGraphBody(cycle), modified)
+		}
+	})
+	bodyBytes := int64(len(memtest.AgentGraphBody(0)))
+	if growth > 2*bodyBytes {
+		t.Errorf("heap grew %d bytes over %d republishes of a %d-byte body, want under %d", growth, cycles, bodyBytes, 2*bodyBytes)
+	}
+	if got := mustLookup(t, c, "observations", Options{Match: MatchBody}); len(got) != 1 {
+		t.Errorf("body lookup after republish = %d rows, want 1", len(got))
+	}
+}
+
+// A section whose own text is one line must not keep the body alive.
+func TestIndexSectionsReleasesBody(t *testing.T) {
+	body := []byte("## Status\n\nok\n\n" + strings.Repeat("----------\n", 1<<16))
+	docs := make([]*DocSections, 8)
+	growth := memtest.Retained(func() {
+		for i := range docs {
+			docs[i] = IndexSections(body)
+		}
+	})
+	if growth > int64(len(body)) {
+		t.Errorf("heap grew %d bytes holding %d indexes of a %d-byte body, want under %d", growth, len(docs), len(body), len(body))
+	}
+	if docs[0].Len() != 1 || docs[0].sections[0].text != "ok" {
+		t.Fatalf("sections = %+v, want one section with text ok", docs[0].sections)
+	}
+	runtime.KeepAlive(docs)
 }

@@ -1,9 +1,13 @@
 package catalog
 
 import (
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 func TestParseImportance(t *testing.T) {
@@ -117,4 +121,19 @@ func TestFromDocument(t *testing.T) {
 	if e.Metadata["project"] == "mutated" {
 		t.Error("FromDocument aliased the caller's metadata map")
 	}
+}
+
+// A derived title must not keep the body it was read from alive.
+func TestFromDocumentTitleReleasesBody(t *testing.T) {
+	body := []byte("# Title\n\n" + strings.Repeat("body text ", 1<<17))
+	entries := make([]*Entry, 8)
+	growth := memtest.Retained(func() {
+		for i := range entries {
+			entries[i] = FromDocument("/doc.md", nil, body, time.Time{})
+		}
+	})
+	if growth > int64(len(body)) {
+		t.Errorf("heap grew %d bytes holding %d titles of a %d-byte body, want under %d", growth, len(entries), len(body), len(body))
+	}
+	runtime.KeepAlive(entries)
 }
