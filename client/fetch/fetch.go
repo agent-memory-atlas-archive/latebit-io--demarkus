@@ -249,28 +249,8 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 		stream.CancelWrite(0)
 	})
 	defer stopCancel()
-
-	// From the first written byte on, the server may have acted on the request.
-	if n, err := req.WriteTo(stream); err != nil {
-		stream.CancelWrite(0)
-		stream.CancelRead(0)
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		} else {
-			err = fmt.Errorf("send request: %w", err)
-		}
-		// The request goes out in one write; zero accepted bytes means nothing was sent.
-		if n == 0 {
-			return Result{}, err
-		}
-		return Result{}, &sentError{cause: err}
-	}
-	if err := stream.Close(); err != nil {
-		stream.CancelRead(0)
-		if ctx.Err() != nil {
-			return Result{}, &sentError{cause: ctx.Err()}
-		}
-		return Result{}, &sentError{cause: fmt.Errorf("close request stream: %w", err)}
+	if err := sendRequest(ctx, stream, req); err != nil {
+		return Result{}, err
 	}
 
 	resp, err := protocol.ParseResponse(responseReader(ctx, stream))
@@ -283,6 +263,34 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	}
 
 	return Result{Response: resp}, nil
+}
+
+// sendRequest writes req and closes the send side. From the first written
+// byte on, the server may have acted on the request, so a failure after it
+// is a sentError.
+func sendRequest(ctx context.Context, stream *quic.Stream, req protocol.Request) error {
+	if n, err := req.WriteTo(stream); err != nil {
+		stream.CancelWrite(0)
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else {
+			err = fmt.Errorf("send request: %w", err)
+		}
+		// The request goes out in one write; zero accepted bytes means nothing was sent.
+		if n == 0 {
+			return err
+		}
+		return &sentError{cause: err}
+	}
+	if err := stream.Close(); err != nil {
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return &sentError{cause: ctx.Err()}
+		}
+		return &sentError{cause: fmt.Errorf("close request stream: %w", err)}
+	}
+	return nil
 }
 
 // sentError wraps a failure that happened after request bytes left the client.
@@ -298,15 +306,19 @@ func (c *Client) doWriteContext(ctx context.Context, host string, fn func(conn *
 	return c.retry(ctx, host, false, fn)
 }
 
-// doWithRetryContext retries transient failures up to 5 times with a fixed 100ms delay.
+// doWithRetryContext retries transient failures up to maxRetries times with
+// a fixed delay.
 func (c *Client) doWithRetryContext(ctx context.Context, host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	return c.retry(ctx, host, true, fn)
 }
 
-func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
-	const maxRetries = 5
-	const retryDelay = 100 * time.Millisecond
+// Transient failures are retried this often, this far apart.
+const (
+	maxRetries = 5
+	retryDelay = 100 * time.Millisecond
+)
 
+func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	var lastErr error
 	for attempt := range maxRetries {
 		if err := ctx.Err(); err != nil {
@@ -315,7 +327,7 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 		// A failed dial stored nothing; whatever is pooled belongs to someone else.
 		conn, err := c.acquire(ctx, host)
 		if err != nil {
-			if attempt < maxRetries-1 && isTransientError(err) {
+			if attempt < maxRetries-1 && isConnectionError(err) {
 				if err := waitForRetry(ctx, retryDelay); err != nil {
 					return Result{}, err
 				}
@@ -326,10 +338,7 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 
 		result, err := fn(conn)
 		unknown := !resend && errors.Is(err, protocol.ErrOutcomeUnknown)
-		if err != nil && (unknown || isTransientError(err)) {
-			c.evict(host, conn)
-		}
-		c.release(conn)
+		c.dispose(host, conn, err)
 		if err == nil {
 			return result, nil
 		}
@@ -343,7 +352,7 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 		}
 
 		lastErr = err
-		if attempt < maxRetries-1 && isTransientError(err) {
+		if attempt < maxRetries-1 && isRetryable(err) {
 			if err := waitForRetry(ctx, retryDelay); err != nil {
 				return Result{}, err
 			}
@@ -354,6 +363,15 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 	}
 
 	return Result{}, lastErr
+}
+
+// dispose hands conn back after a call that ended with err: a stream
+// failure keeps the connection unless it died meanwhile.
+func (c *Client) dispose(host string, conn *quic.Conn, err error) {
+	if err != nil && (isConnectionError(err) || conn.Context().Err() != nil) {
+		c.evict(host, conn)
+	}
+	c.release(conn)
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {
@@ -481,18 +499,25 @@ func (c *Client) evict(host string, conn *quic.Conn) {
 	}
 }
 
-func isTransientError(err error) bool {
-	if err == nil || errors.Is(err, ErrResponseBudget) {
+// isRetryable reports an error worth another attempt, on a fresh connection
+// or a fresh stream.
+func isRetryable(err error) bool {
+	return isConnectionError(err) || isStreamError(err)
+}
+
+// isConnectionError reports a failure of the whole connection: a failed dial,
+// a close by either side, an idle or handshake timeout, or a request that
+// timed out before its stream was open. The pooled connection is evicted.
+func isConnectionError(err error) bool {
+	if err == nil || errors.Is(err, ErrResponseBudget) || isStreamError(err) {
 		return false
 	}
-	if isTimeoutError(err) || isTemporaryError(err) {
+	if isTimeoutError(err) || isTemporaryError(err) || isConnectionClosed(err) {
 		return true
 	}
 	errStr := err.Error()
 	switch {
 	case errStr == "EOF":
-		return true
-	case strings.Contains(errStr, "no recent network activity"):
 		return true
 	case strings.Contains(errStr, "connection refused"):
 		return true
@@ -500,6 +525,32 @@ func isTransientError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// isStreamError reports a failure confined to one stream: the peer reset it,
+// or the request timed out after it went out. The request is retried on a new
+// stream and the connection stays pooled.
+func isStreamError(err error) bool {
+	var reset *quic.StreamError
+	if errors.As(err, &reset) {
+		return true
+	}
+	var sent *sentError
+	return errors.As(err, &sent) && !isConnectionClosed(err) && isTimeoutError(err)
+}
+
+// isConnectionClosed reports a QUIC error that ends the connection itself.
+func isConnectionClosed(err error) bool {
+	var (
+		app       *quic.ApplicationError
+		transport *quic.TransportError
+		idle      *quic.IdleTimeoutError
+		handshake *quic.HandshakeTimeoutError
+		reset     *quic.StatelessResetError
+		version   *quic.VersionNegotiationError
+	)
+	return errors.As(err, &app) || errors.As(err, &transport) || errors.As(err, &idle) ||
+		errors.As(err, &handshake) || errors.As(err, &reset) || errors.As(err, &version)
 }
 
 // isTimeoutError must use errors.As: every error here is wrapped, and a bare

@@ -46,6 +46,7 @@ type Config struct {
 	Listen  ListenConfig `yaml:"listen"`
 	Health  HealthConfig `yaml:"health"`
 	TLS     TLSConfig    `yaml:"tls"`
+	Peers   PeersConfig  `yaml:"peers"`
 	// WorldsFile optionally names a worlds-only YAML document appended
 	// to Worlds at Load: the dynamic-world seam a provisioner (the
 	// memory broker) owns while the operator owns this file.
@@ -58,6 +59,35 @@ type ListenConfig struct {
 	Address            string   `yaml:"address"`
 	MaxIncomingStreams int64    `yaml:"maxIncomingStreams"`
 	IdleTimeout        Duration `yaml:"idleTimeout"`
+}
+
+// PeersConfig connects the replicas of one deployment so a commit on one
+// reaches watchers on the others as a hint, ahead of the backstop poll.
+// An empty Listen disables it.
+type PeersConfig struct {
+	// Listen is the address of the replica-only hint listener.
+	Listen string `yaml:"listen"`
+	// Service is a headless Service name resolved to the peers' addresses,
+	// hinted on Listen's port; this host's own addresses are left out.
+	Service string `yaml:"service"`
+	// Addresses hints fixed host:port peers, for deployments without DNS.
+	Addresses []string `yaml:"addresses"`
+}
+
+// Enabled reports whether replicas exchange hints.
+func (config PeersConfig) Enabled() bool { return config.Listen != "" }
+
+// Port is the hint listener's port, which peers are dialed on.
+func (config PeersConfig) Port() (int, error) {
+	_, port, err := net.SplitHostPort(config.Listen)
+	if err != nil {
+		return 0, fmt.Errorf("peers.listen %q: %w", config.Listen, err)
+	}
+	number, err := net.LookupPort("udp", port)
+	if err != nil {
+		return 0, fmt.Errorf("peers.listen %q: %w", config.Listen, err)
+	}
+	return number, nil
 }
 
 // HealthConfig contains the private management listener address.
@@ -141,6 +171,8 @@ type LimitsConfig struct {
 	RequestTimeout        Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     float64  `yaml:"requestsPerSecond"`
 	Burst                 int      `yaml:"burst"`
+	// MaxWatches caps open WATCH streams in the world.
+	MaxWatches int `yaml:"maxWatches"`
 	// MaxDocuments caps distinct document paths in the world (per-tenant
 	// quota). 0 = unlimited.
 	MaxDocuments int `yaml:"maxDocuments"`
@@ -151,6 +183,7 @@ type rawConfig struct {
 	Listen     rawListenConfig  `yaml:"listen"`
 	Health     rawHealthConfig  `yaml:"health"`
 	TLS        TLSConfig        `yaml:"tls"`
+	Peers      PeersConfig      `yaml:"peers"`
 	WorldsFile string           `yaml:"worldsFile"`
 	Worlds     []rawWorldConfig `yaml:"worlds"`
 }
@@ -186,6 +219,7 @@ type rawLimitsConfig struct {
 	RequestTimeout        *Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     *float64  `yaml:"requestsPerSecond"`
 	Burst                 *int      `yaml:"burst"`
+	MaxWatches            *int      `yaml:"maxWatches"`
 	MaxDocuments          *int      `yaml:"maxDocuments"`
 }
 
@@ -308,6 +342,7 @@ func (raw *rawConfig) config() *Config {
 		},
 		Health:     HealthConfig{Address: valueOr(raw.Health.Address, ":8081")},
 		TLS:        raw.TLS,
+		Peers:      PeersConfig{Listen: strings.TrimSpace(raw.Peers.Listen), Service: strings.TrimSpace(raw.Peers.Service), Addresses: raw.Peers.Addresses},
 		WorldsFile: strings.TrimSpace(raw.WorldsFile),
 		Worlds:     make([]WorldConfig, len(raw.Worlds)),
 	}
@@ -333,10 +368,32 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 			RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
 			RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, 50.0),
 			Burst:                 valueOr(world.Limits.Burst, 100),
+			MaxWatches:            valueOr(world.Limits.MaxWatches, 1024),
 			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
 		},
 		Bootstrap: world.Bootstrap,
 	}
+}
+
+func (config PeersConfig) validate() error {
+	if !config.Enabled() {
+		if config.Service != "" || len(config.Addresses) > 0 {
+			return errors.New("peers.listen must be set when peers.service or peers.addresses is")
+		}
+		return nil
+	}
+	if _, err := config.Port(); err != nil {
+		return err
+	}
+	if config.Service == "" && len(config.Addresses) == 0 {
+		return errors.New("peers.service or peers.addresses must name the peers to hint")
+	}
+	for _, address := range config.Addresses {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("peers.addresses %q: %w", address, err)
+		}
+	}
+	return nil
 }
 
 func valueOr[T any](value *T, fallback T) T {
@@ -365,6 +422,9 @@ func (config *Config) Validate() error {
 	}
 	if strings.TrimSpace(config.Health.Address) == "" {
 		return errors.New("health.address must not be empty")
+	}
+	if err := config.Peers.validate(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(config.TLS.CertFile) == "" {
 		return errors.New("tls.certFile is required")
@@ -619,6 +679,9 @@ func validateLimits(location string, limits *LimitsConfig) error {
 	}
 	if limits.MaxConcurrentRequests <= 0 {
 		return fmt.Errorf("%s.limits.maxConcurrentRequests must be positive (got %d)", location, limits.MaxConcurrentRequests)
+	}
+	if limits.MaxWatches <= 0 {
+		return fmt.Errorf("%s.limits.maxWatches must be positive (got %d)", location, limits.MaxWatches)
 	}
 	if limits.RequestTimeout < 0 {
 		return fmt.Errorf("%s.limits.requestTimeout must not be negative (got %s)", location, time.Duration(limits.RequestTimeout))

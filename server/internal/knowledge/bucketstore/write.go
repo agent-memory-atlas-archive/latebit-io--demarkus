@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 type candidateMutation struct {
@@ -35,6 +36,7 @@ type candidateMutation struct {
 type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
+	Sequence int64 // head sequence of the commit, once it succeeded
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
@@ -75,7 +77,7 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (muta
 				return nil, conflictResult(current), storefmt.ErrConflict
 			}
 		}
-		write := writeCandidate{path: canonical, expected: expected, body: body, metadata: meta, precondition: req.Precondition}
+		write := writeCandidate{path: canonical, op: protocol.OpPublish, expected: expected, body: body, metadata: meta, precondition: req.Precondition}
 		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
@@ -140,7 +142,7 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 		if err := storefmt.ValidateWrite(combined, merged); err != nil {
 			return nil, mutationResult{}, err
 		}
-		write := writeCandidate{path: canonical, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
+		write := writeCandidate{path: canonical, op: protocol.OpAppend, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
 		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
@@ -158,7 +160,7 @@ func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest)
 	result, err := store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		return store.buildArchiveCandidate(ctx, view, operationID, &archive)
 	})
-	return backend.ArchiveResult(result), err
+	return backend.ArchiveResult{Document: result.Document, Changed: result.Changed}, err
 }
 
 func canonicalMutationPath(path string) (string, error) {
@@ -180,7 +182,7 @@ func conflictResult(version int) mutationResult {
 
 // writeCandidate is one prepared PUBLISH or APPEND inside a commit attempt.
 type writeCandidate struct {
-	path         string
+	path, op     string
 	expected     int
 	body         []byte
 	metadata     map[string]string
@@ -329,9 +331,9 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
-	result := mutationResult{Document: document, Changed: true}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
-		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, result: result, body: body,
+		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, body: body,
+		result: mutationResult{Document: document, Changed: true}, op: write.op, agent: persisted["agent"],
 	})
 }
 
@@ -392,6 +394,7 @@ func (store *Store) buildArchiveCandidate(
 	result := mutationResult{Document: document, Changed: true}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
 		operationID: operationID, entry: &oldEntry, objects: objects, result: result,
+		op: changefeed.ArchiveOp(archived), agent: document.Metadata["agent"],
 	})
 }
 
@@ -538,6 +541,7 @@ type namespaceChange struct {
 	objects     []modelObject
 	result      mutationResult
 	body        []byte
+	op, agent   string // what the head receipt names
 }
 
 // buildNamespaceCandidate derives the committed snapshot from base plus one
@@ -589,7 +593,7 @@ func (store *Store) buildNamespaceCandidate(
 	}
 	objects = append(objects, rootModel)
 
-	head := nextHead(&base.Head, rootRef, change.operationID)
+	head := nextHead(&base.Head, rootRef, change)
 	if err := validateHeadObject(&head); err != nil {
 		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
 	}
@@ -627,12 +631,17 @@ func (store *Store) buildNamespaceCandidate(
 	}, change.result, nil
 }
 
-func nextHead(current *headObject, root objectRef, operationID string) headObject {
+func nextHead(current *headObject, root objectRef, change *namespaceChange) headObject {
 	sequence := current.Sequence + 1
 	receipts := append(slices.Clone(current.Receipts), operationReceipt{
-		OperationID: operationID,
+		OperationID: change.operationID,
 		Sequence:    sequence,
 		Result:      "committed",
+		Path:        change.entry.Path,
+		Op:          change.op,
+		Agent:       change.agent,
+		Version:     change.entry.Current,
+		Hash:        change.entry.BodyHash,
 	})
 	if len(receipts) > maximumReceipts {
 		receipts = slices.Clone(receipts[len(receipts)-maximumReceipts:])

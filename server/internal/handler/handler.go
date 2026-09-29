@@ -20,6 +20,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
@@ -55,6 +56,11 @@ type Config struct {
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
+	// Changes serves WATCH; nil answers the verb bad-request, as a server
+	// without it does.
+	Changes *changefeed.Hub
+	// HeartbeatInterval paces idle WATCH heartbeats; zero is the protocol's.
+	HeartbeatInterval time.Duration
 }
 
 // Handler serves the Mark protocol over a DocumentStore. Build it with New.
@@ -63,6 +69,8 @@ type Handler struct {
 	getTokenStore func() *auth.TokenStore
 	logger        *slog.Logger
 	readOnly      bool
+	changes       *changefeed.Hub
+	heartbeat     time.Duration
 }
 
 // New refuses a config without a store or a logger, so neither can be missing
@@ -74,11 +82,17 @@ func New(config Config) (*Handler, error) {
 	if config.Logger == nil {
 		return nil, errors.New("handler: logger is nil")
 	}
+	heartbeat := config.HeartbeatInterval
+	if heartbeat <= 0 {
+		heartbeat = protocol.WatchHeartbeatInterval
+	}
 	return &Handler{
 		store:         config.Store,
 		getTokenStore: config.GetTokenStore,
 		logger:        config.Logger,
 		readOnly:      config.ReadOnly,
+		changes:       config.Changes,
+		heartbeat:     heartbeat,
 	}, nil
 }
 
@@ -103,22 +117,43 @@ type Stream interface {
 }
 
 // HandleStream reads a request from the stream and writes a response. ctx
-// bounds every store call the request makes.
+// bounds every store call the request makes; a WATCH runs until it ends.
 func (h *Handler) HandleStream(ctx context.Context, stream Stream) {
 	// The response is already written or failed; a close error changes nothing.
 	defer func() { _ = stream.Close() }()
 
+	req, ok := h.ReadRequest(stream)
+	if !ok {
+		return
+	}
+	h.Serve(ctx, stream, req)
+}
+
+// ReadRequest parses the request on stream and answers a malformed one
+// itself; ok is false when nothing further is to be served.
+func (h *Handler) ReadRequest(stream io.ReadWriter) (req protocol.Request, ok bool) {
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
 		h.writeParseError(stream, err)
-		return
+		return protocol.Request{}, false
 	}
+	return req, true
+}
 
+// Serve answers one parsed request on stream. ctx bounds every store call;
+// for WATCH it bounds the stream's life.
+func (h *Handler) Serve(ctx context.Context, stream io.Writer, req protocol.Request) {
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
 	if storefmt.ContainsDotDot(req.Path) {
 		h.logger.Warn("path traversal attempt blocked", "path", sanitize(req.Path))
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
+		return
+	}
+	if req.Verb == protocol.VerbWatch {
+		// Not pinned to one token store: a watch outlives reloads and
+		// rechecks every event against the current one.
+		h.serveWatch(ctx, stream, req)
 		return
 	}
 	req.Path = storefmt.CanonicalPath(req.Path)
@@ -203,8 +238,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 		h.writeError(w, protocol.StatusNotPermitted, "server is read-only")
 		return
 	}
-	if _, ok := protocol.IsHashPath(req.Path); ok {
-		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
+	if h.refuseHashPath(w, req.Path) {
 		return
 	}
 	if int64(len(req.Body)) > protocol.MaxBodyLength {
@@ -343,27 +377,40 @@ func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 	return true
 }
 
-// writeAuthDenied answers a failed authorization: a missing, unknown or
-// expired token is unauthorized, anything else is not permitted.
+// writeAuthDenied answers a failed authorization.
 func (h *Handler) writeAuthDenied(w io.Writer, req protocol.Request, err error) {
-	if auth.IsUnauthenticated(err) {
-		h.logger.Warn("unauthorized", "operation", req.Verb, "path", sanitize(req.Path))
-		h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+	status := authStatus(err)
+	h.logger.Warn(status, "operation", req.Verb, "path", sanitize(req.Path))
+	if status == protocol.StatusUnauthorized {
+		h.writeError(w, status, "authentication required")
 		return
 	}
-	h.logger.Warn("not permitted", "operation", req.Verb, "path", sanitize(req.Path))
-	h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+	h.writeError(w, status, "insufficient permissions")
+}
+
+// authStatus maps an auth verdict to its status: a missing, unknown or
+// expired token is unauthorized, anything else is not permitted.
+func authStatus(err error) string {
+	if auth.IsUnauthenticated(err) {
+		return protocol.StatusUnauthorized
+	}
+	return protocol.StatusNotPermitted
 }
 
 // checkReadAuth decides a read without writing a response: nil when allowed,
 // otherwise the auth verdict.
 func (h *Handler) checkReadAuth(reqPath, token string) error {
-	directoryPath := strings.HasSuffix(reqPath, "/")
-	reqPath = storefmt.CanonicalPath(reqPath)
-	if directoryPath && reqPath != "/" {
-		reqPath += "/"
+	return h.tokenStore().AuthorizeRead(token, scopePath(reqPath))
+}
+
+// scopePath is the canonical path with a trailing slash kept: "/" or a
+// prefix ending in "/" names a subtree, anything else one document.
+func scopePath(reqPath string) string {
+	scope := storefmt.CanonicalPath(reqPath)
+	if strings.HasSuffix(reqPath, "/") && scope != "/" {
+		scope += "/"
 	}
-	return h.tokenStore().AuthorizeRead(token, reqPath)
+	return scope
 }
 
 func (h *Handler) handleFetch(ctx context.Context, call *readCall) {

@@ -98,6 +98,14 @@ type operationReceipt struct {
 	OperationID string `json:"operation_id"`
 	Sequence    int64  `json:"sequence"`
 	Result      string `json:"result"`
+	// What the commit changed, so a replica can report it as a change
+	// hint; absent in heads written before hints existed. Version and hash
+	// are the commit's own: the path may have moved on by the time it is read.
+	Path    string `json:"path,omitempty"`
+	Op      string `json:"op,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	Version int    `json:"version,omitempty"`
+	Hash    string `json:"hash,omitempty"`
 }
 
 type headObject struct {

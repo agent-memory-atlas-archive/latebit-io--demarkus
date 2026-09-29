@@ -67,6 +67,24 @@ func logPartialWalk(logger *slog.Logger, what string, err error) bool {
 	return true
 }
 
+// runtimeConfig wires the store into the one world runtime with the change
+// hub its commits feed.
+func runtimeConfig(cfg *config.Config, b backend, logger *slog.Logger) *worldruntime.Config {
+	return &worldruntime.Config{
+		Store:          b.Store,
+		CloseBackend:   b.Close,
+		TokensFile:     cfg.TokensFile,
+		ReadOnly:       cfg.ReadOnly,
+		RequestTimeout: cfg.RequestTimeout,
+		RateLimit:      cfg.RateLimit,
+		RateBurst:      cfg.RateBurst,
+		Logger:         logger,
+		Changes:        b.Changes,
+		MaxWatches:     cfg.MaxWatches,
+		MaxStreams:     cfg.MaxStreams,
+	}
+}
+
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
@@ -194,16 +212,7 @@ func run() error {
 		MaxIdleTimeout:        cfg.IdleTimeout,
 	}
 
-	runtime, err := worldruntime.New(&worldruntime.Config{
-		Store:          b.Store,
-		CloseBackend:   b.Close,
-		TokensFile:     cfg.TokensFile,
-		ReadOnly:       cfg.ReadOnly,
-		RequestTimeout: cfg.RequestTimeout,
-		RateLimit:      cfg.RateLimit,
-		RateBurst:      cfg.RateBurst,
-		Logger:         logger,
-	})
+	runtime, err := worldruntime.New(runtimeConfig(cfg, b, logger))
 	if err != nil {
 		logger.Error("world runtime unavailable", "error", err)
 		return err
@@ -268,13 +277,7 @@ func run() error {
 	select {
 	case sig := <-sigChan:
 		logger.Info("received signal, initiating graceful shutdown", "signal", sig.String())
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("server shutdown incomplete", "error", err)
-		} else {
-			logger.Info("all connections drained")
-		}
-		cancel()
+		server.ShutdownAfter(runtime.Drain, 10*time.Second)
 		serveErr = <-serveResult
 	case serveErr = <-serveResult:
 		if !errors.Is(serveErr, quicserve.ErrServerClosed) {
