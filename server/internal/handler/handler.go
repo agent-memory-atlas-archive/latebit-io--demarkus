@@ -20,7 +20,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	"github.com/latebit-io/demarkus/server/internal/fanout"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
@@ -56,11 +56,9 @@ type Config struct {
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
-	// Changes serves WATCH; nil answers the verb bad-request, as a server
+	// Watches serves WATCH; nil answers the verb bad-request, as a server
 	// without it does.
-	Changes *changefeed.Hub
-	// HeartbeatInterval paces idle WATCH heartbeats; zero is the protocol's.
-	HeartbeatInterval time.Duration
+	Watches *fanout.Fanout
 }
 
 // Handler serves the Mark protocol over a DocumentStore. Build it with New.
@@ -69,8 +67,7 @@ type Handler struct {
 	getTokenStore func() *auth.TokenStore
 	logger        *slog.Logger
 	readOnly      bool
-	changes       *changefeed.Hub
-	heartbeat     time.Duration
+	watches       *fanout.Fanout
 }
 
 // New refuses a config without a store or a logger, so neither can be missing
@@ -82,17 +79,12 @@ func New(config Config) (*Handler, error) {
 	if config.Logger == nil {
 		return nil, errors.New("handler: logger is nil")
 	}
-	heartbeat := config.HeartbeatInterval
-	if heartbeat <= 0 {
-		heartbeat = protocol.WatchHeartbeatInterval
-	}
 	return &Handler{
 		store:         config.Store,
 		getTokenStore: config.GetTokenStore,
 		logger:        config.Logger,
 		readOnly:      config.ReadOnly,
-		changes:       config.Changes,
-		heartbeat:     heartbeat,
+		watches:       config.Watches,
 	}, nil
 }
 
@@ -246,7 +238,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 		return
 	}
-	tokenLabel, ok := h.authorizeWrite(w, req)
+	tokenLabel, ok := h.authorizeWrite(ctx, w, req)
 	if !ok {
 		return
 	}
@@ -262,8 +254,16 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 }
 
 // authorizeWrite checks the publish capability every write verb needs and
-// answers the denial itself. Without a token store no write is allowed.
-func (h *Handler) authorizeWrite(w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
+// answers the denial itself: a grant on ctx decides alone, else the token.
+// Without a grant or a token store no write is allowed.
+func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
+	if grant, granted := protocol.GrantFrom(ctx); granted {
+		if !auth.Permits(&grant, req.Path) {
+			h.Deny(w, req, auth.ErrNotPermitted)
+			return "", false
+		}
+		return grant.Label, true
+	}
 	ts := h.tokenStore()
 	if ts == nil {
 		h.writeError(w, protocol.StatusNotPermitted, writeActivity[req.Verb]+" requires auth configuration")
@@ -271,7 +271,7 @@ func (h *Handler) authorizeWrite(w io.Writer, req protocol.Request) (tokenLabel 
 	}
 	tokenLabel, err := ts.Authorize(req.Metadata["auth"], req.Path, "publish")
 	if err != nil {
-		h.writeAuthDenied(w, req, err)
+		h.Deny(w, req, err)
 		return "", false
 	}
 	return tokenLabel, true
@@ -371,30 +371,22 @@ func (h *Handler) handleFetchByHash(ctx context.Context, call *readCall, hash st
 // error response if auth is required but missing or invalid.
 func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 	if err := h.checkReadAuth(req.Path, req.Metadata["auth"]); err != nil {
-		h.writeAuthDenied(w, req, err)
+		h.Deny(w, req, err)
 		return false
 	}
 	return true
 }
 
-// writeAuthDenied answers a failed authorization.
-func (h *Handler) writeAuthDenied(w io.Writer, req protocol.Request, err error) {
-	status := authStatus(err)
+// Deny answers a failed authorization, err being an auth package sentinel;
+// a caller that refused req before Serve answers through it too.
+func (h *Handler) Deny(w io.Writer, req protocol.Request, err error) {
+	status := auth.DenialStatus(err)
 	h.logger.Warn(status, "operation", req.Verb, "path", sanitize(req.Path))
 	if status == protocol.StatusUnauthorized {
 		h.writeError(w, status, "authentication required")
 		return
 	}
 	h.writeError(w, status, "insufficient permissions")
-}
-
-// authStatus maps an auth verdict to its status: a missing, unknown or
-// expired token is unauthorized, anything else is not permitted.
-func authStatus(err error) string {
-	if auth.IsUnauthenticated(err) {
-		return protocol.StatusUnauthorized
-	}
-	return protocol.StatusNotPermitted
 }
 
 // checkReadAuth decides a read without writing a response: nil when allowed,

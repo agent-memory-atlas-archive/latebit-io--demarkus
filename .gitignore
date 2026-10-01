@@ -50,8 +50,7 @@ server/demarkus-server
 server/demarkus-knowledge-server
 tools/demarkus-token/demarkus-token
 tools/demarkus-publish/demarkus-publish
-tools/demarkus-knowledge-broker/demarkus-knowledge-broker
-tools/demarkus-memory-broker/demarkus-memory-broker
+knowledge/cmd/demarkus-knowledge/demarkus-knowledge
 
 # OS files
 .DS_Store

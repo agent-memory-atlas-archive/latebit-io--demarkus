@@ -110,7 +110,7 @@ reviews:
           any growth in WithDescription / mcp.Description text; rationale
           belongs in session guidance or the skill, not the schema
 
-    - path: "tools/internal/broker/gateway/mcp_tools_list.go"
+    - path: "knowledge/internal/broker/gateway/mcp_tools_list.go"
       instructions: >
         Broker MCP gateway tool list; every joined knowledge system ships
         these schemas on every request in eager-loading hosts. Same rule as
@@ -189,8 +189,8 @@ reviews:
         type(scope): description. Valid types: feat, fix, docs, style,
         refactor, perf, test, build, ci, chore, revert.
         The scope is optional. Valid scopes: protocol, server, client,
-        tui, mcp, tools, plugins, deploy, install, publish, broker,
-        memory-broker, kind.
+        tui, mcp, tools, plugins, deploy, install, publish, knowledge,
+        kind.
 
 chat:
   auto_reply: true

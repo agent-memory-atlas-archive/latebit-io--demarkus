@@ -1,0 +1,10 @@
+worlds:
+    - name: eve-adams-998d03fa
+      authorities:
+        - eve-adams-998d03fa.memory-worlds.svc.cluster.local
+      bucket:
+        url: gs://memory-eve-adams-998d03fa
+        worldID: 6bb48b98-9eed-46cb-882e-f76461c4b63f
+      limits:
+        maxDocuments: 500
+      bootstrap: true
